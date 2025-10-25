@@ -1,0 +1,26 @@
+name: ultrahealers-api
+services:
+  - name: api-server
+    type: web
+    build:
+      type: buildpack
+      buildpack: nodejs
+    run_command: npm run start
+    ports:
+      - port: 8000
+        protocol: http
+    health_check:
+      http:
+        path: /health
+        port: 8000
+    scaling:
+      min: 1
+      max: 3
+    env:
+      - name: NODE_ENV
+        value: production
+      - name: PORT
+        value: "8000"
+    regions:
+      - fra # Frankfurt (or use 'was' for Washington)
+    instance_type: nano # Free tier
