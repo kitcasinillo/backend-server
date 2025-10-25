@@ -5,15 +5,9 @@ const morgan = require('morgan');
 const dotenv = require('dotenv');
 const path = require('path');
 
-// Load environment variables from monorepo root .env, fallback to local
-const rootEnvPath = path.resolve(__dirname, '../../.env');
-const result = dotenv.config({ path: rootEnvPath });
-if (result.error) {
-  dotenv.config();
-  console.log('⚠️  Loaded local .env in apps/server (root .env not found)');
-} else {
-  console.log(`✅ Loaded root .env: ${rootEnvPath}`);
-}
+// Load environment variables
+dotenv.config();
+console.log('✅ Environment variables loaded');
 
 // Import configurations
 const { initializeFirebase } = require('./config/database');
