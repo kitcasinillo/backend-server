@@ -55,8 +55,21 @@ app.use(express.urlencoded({ extended: true }));
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map(origin => origin.trim()) || [
   'http://localhost:5173',
   'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:5176',
+  'http://localhost:5178',
   'http://localhost:3000'
 ];
+
+// Helper: detect localhost origins (allow across environments for local dev)
+const isLocalhostOrigin = (o) => {
+  return typeof o === 'string' && (
+    o.startsWith('http://localhost:') ||
+    o.startsWith('http://127.0.0.1:') ||
+    o.startsWith('https://localhost:') ||
+    o.startsWith('https://127.0.0.1:')
+  );
+};
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -66,8 +79,8 @@ app.use(cors({
       return;
     }
 
-    // In development, allow all localhost origins
-    if (process.env.NODE_ENV !== 'production' && origin.startsWith('http://localhost:')) {
+    // Always allow localhost origins for local development (even if NODE_ENV=production)
+    if (isLocalhostOrigin(origin)) {
       callback(null, true);
       return;
     }

@@ -4,7 +4,8 @@ const {
   triggerUnreadMessageNotifications, 
   testUserNotifications, 
   controlScheduler,
-  debugBookingMessages
+  debugBookingMessages,
+  sendN8nEvent
 } = require('../controllers/notificationController');
 
 const router = express.Router();
@@ -23,5 +24,8 @@ router.post('/control-scheduler', controlScheduler);
 
 // Debug booking messages
 router.post('/debug-booking-messages', debugBookingMessages);
+
+// Send generic event to n8n (signup, booking, etc.)
+router.post('/n8n-event', sendN8nEvent);
 
 module.exports = router;
