@@ -10,7 +10,9 @@
     "start": "node server.js",
     "build": "echo 'Server build complete'",
     "lint": "echo 'Server lint complete'",
-    "postinstall": "echo 'Server dependencies installed successfully'"
+    "postinstall": "echo 'Server dependencies installed successfully'",
+    "n8n:test": "node scripts/n8n-test.js",
+    "n8n:ping": "node scripts/n8n-test.js --event=system.ping"
   },
   "dependencies": {
     "cors": "^2.8.5",

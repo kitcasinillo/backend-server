@@ -240,61 +240,29 @@ const debugBookingMessages = async (req, res) => {
   }
 };
 
-// Send event to n8n webhook for notifications
+const { sendEvent } = require('../utils/n8n');
+
+// Send event to n8n webhook for notifications (supports both {event,payload} and flat bodies with eventType)
 const sendN8nEvent = async (req, res) => {
   try {
-    const { event, payload } = req.body || {};
+    const event = req.body?.event || req.body?.eventType;
+    let payload = req.body?.payload;
+
+    // If a flat JSON with eventType was posted, treat remaining fields as payload
+    if (!payload && req.body?.eventType) {
+      const { eventType, ...rest } = req.body;
+      payload = rest;
+    }
+
     if (!event || !payload) {
-      return res.status(400).json({ success: false, error: 'event and payload are required' });
+      return res.status(400).json({ success: false, error: 'event/eventType and payload are required' });
     }
 
-    const baseUrl = process.env.N8N_WEBHOOK_URL || process.env.N8N_API_BASE_URL;
-    const apiKey = process.env.N8N_API_KEY;
-
-    if (!baseUrl) {
-      console.warn('⚠️ N8N not configured (missing N8N_WEBHOOK_URL/N8N_API_BASE_URL). Event will be logged only.');
-      console.log('🧾 N8N EVENT (not sent):', { event, payload });
-      return res.json({ success: true, sent: false, message: 'n8n not configured' });
+    const result = await sendEvent(event, payload, { meta: { source: 'backend:notificationController' } });
+    if (!result.sent) {
+      return res.status(500).json({ success: false, error: result.reason || 'Failed to send event' });
     }
-
-    // Compose URL: if a specific webhook URL is given, post there
-    // Otherwise use base + /webhook/:event
-    const url = baseUrl.includes('/webhook/') ? baseUrl : `${baseUrl.replace(/\/$/, '')}/webhook/${encodeURIComponent(event)}`;
-
-    const headers = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['X-API-Key'] = apiKey;
-
-    // Use global fetch if available
-    let response;
-    if (typeof fetch === 'function') {
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ event, payload })
-      });
-    } else {
-      // Lazy import node-fetch if not present
-      try {
-        const nodeFetch = (await import('node-fetch')).default;
-        response = await nodeFetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ event, payload })
-        });
-      } catch (e) {
-        console.error('❌ Unable to send n8n event: fetch not available');
-        return res.status(500).json({ success: false, error: 'Fetch not available to send n8n event' });
-      }
-    }
-
-    const ok = response && response.ok;
-    const text = response ? await response.text() : '';
-    if (!ok) {
-      console.error('❌ n8n webhook responded with error:', text);
-      return res.status(502).json({ success: false, error: 'n8n webhook error', details: text });
-    }
-
-    return res.json({ success: true, sent: true });
+    return res.json({ success: true, result });
   } catch (error) {
     console.error('❌ Error sending n8n event:', error);
     res.status(500).json({ success: false, error: error.message });

@@ -21,6 +21,7 @@ const webhookRoutes = require('./routes/webhookRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
+const n8nRoutes = require('./routes/n8nRoutes');
 
 // Import commission config for logging
 const COMMISSION_CONFIG = require('./config/commission');
@@ -111,6 +112,7 @@ app.use('/api', webhookRoutes);
 app.use('/api', bookingRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api', n8nRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {

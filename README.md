@@ -100,6 +100,28 @@ docker run -p 5001:5001 --env-file .env ultrahealers-backend
 - `npm start` - Start production server
 - `npm run build` - Build confirmation (no actual build needed)
 - `npm run lint` - Lint confirmation
+- `npm run n8n:test` - Send a test event to n8n via secure dispatcher
+- `npm run n8n:ping` - Send a ping event to n8n
+
+## 🔧 n8n Test CLI
+
+Use the bundled CLI to validate your n8n webhook:
+
+```bash
+# Ping the workflow
+npm run n8n:ping
+
+# Send a specific event (defaults to booking.created)
+npm run n8n:test -- --event=booking.created
+
+# Provide a custom payload via JSON string
+npm run n8n:test -- --event=user.created --payload={"userId":"u_1","email":"x@y.com"}
+
+# Or load payload from a file
+npm run n8n:test -- --event=retreat.created --file=payload.json
+```
+
+The CLI uses `backend-server/utils/n8n.js` which adds HMAC signature (`X-N8N-Signature`), `X-API-Key`, anti‑replay headers, and retries.
 
 ## 🔗 API Endpoints
 

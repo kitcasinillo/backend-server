@@ -2,6 +2,7 @@ const { getDatabase } = require('../config/database');
 const { getEmailTransporter } = require('../config/email');
 const { generateHealerEmail, generateSeekerEmail } = require('../utils/emailTemplates');
 const { collection, addDoc, query, where, getDocs } = require('firebase/firestore');
+const { sendEvent: sendN8nEvent } = require('../utils/n8n');
 
 // In-memory cache for request deduplication
 const pendingRequests = new Map();
@@ -205,6 +206,81 @@ const createBooking = async (req, res) => {
       bookingId,
       data: { ...bookingData, id: bookingId }
     });
+
+    // Fire-and-forget n8n event (non-blocking for API response)
+    try {
+      // Match desired body shape for booking.created
+      const bookingEventPayload = {
+        id: bookingId,
+        status: bookingData.paymentStatus === 'succeeded' ? 'confirmed' : (bookingData.paymentStatus || 'pending'),
+        seeker: {
+          name: bookingData.seekerName,
+          email: bookingData.seekerEmail,
+        },
+        healer: {
+          name: bookingData.healerName,
+          email: bookingData.healerEmail,
+        },
+        price: {
+          amount: bookingData.amount,
+          currency: bookingData.currency,
+        },
+        session: {
+          date: bookingData.sessionDate || null,
+          timezone: req.body.timezone || 'UTC',
+        },
+        source: req.body.source || 'backend',
+      };
+
+      await sendN8nEvent('booking.created', bookingEventPayload, {
+        meta: { source: 'backend:bookingController' },
+        retry: { retries: 2, backoffMs: 500 }
+      });
+      console.log('📤 Sent booking.created to n8n');
+    } catch (n8nError) {
+      console.warn('⚠️ Failed to send booking.created to n8n:', n8nError?.message || n8nError);
+    }
+
+    // Optional: emit retreat.booking when format/modality suggests a retreat
+    try {
+      const isRetreat = (
+        (typeof format === 'string' && format.toLowerCase().includes('retreat')) ||
+        (typeof modality === 'string' && modality.toLowerCase().includes('retreat')) ||
+        (typeof listingTitle === 'string' && listingTitle.toLowerCase().includes('retreat'))
+      );
+
+      if (isRetreat) {
+        const retreatEventPayload = {
+          retreatId: req.body.retreatId || bookingData.listingId,
+          title: bookingData.listingTitle,
+          seeker: {
+            name: bookingData.seekerName,
+            email: bookingData.seekerEmail,
+          },
+          healer: {
+            name: bookingData.healerName,
+            email: bookingData.healerEmail,
+          },
+          location: req.body.location || undefined,
+          dates: {
+            start: req.body.retreatStart || bookingData.sessionDate || null,
+            end: req.body.retreatEnd || null,
+          },
+          price: {
+            amount: bookingData.amount,
+            currency: bookingData.currency,
+          },
+        };
+
+        await sendN8nEvent('retreat.booking', retreatEventPayload, {
+          meta: { source: 'backend:bookingController' },
+          retry: { retries: 2, backoffMs: 500 }
+        });
+        console.log('📤 Sent retreat.booking to n8n');
+      }
+    } catch (n8nError) {
+      console.warn('⚠️ Failed to send retreat.booking to n8n:', n8nError?.message || n8nError);
+    }
 
   } catch (error) {
     console.error('❌ Error creating booking:', error);

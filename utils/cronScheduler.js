@@ -1,9 +1,11 @@
 const cron = require('node-cron');
 const NotificationService = require('./notificationService');
+const SessionReminderService = require('./sessionReminderService');
 
 class CronScheduler {
   constructor() {
     this.notificationService = new NotificationService();
+    this.sessionReminderService = new SessionReminderService();
     this.isRunning = false;
   }
 
@@ -19,8 +21,25 @@ class CronScheduler {
       timezone: "UTC"
     });
 
+    // Schedule session reminders (configurable)
+    const remindersEnabled = process.env.SESSION_REMINDERS_ENABLED !== 'false';
+    const remindersCron = process.env.SESSION_REMINDER_CRON || '*/10 * * * *';
+    if (remindersEnabled) {
+      cron.schedule(remindersCron, async () => {
+        await this.runSessionReminders();
+      }, {
+        scheduled: true,
+        timezone: 'UTC'
+      });
+    } else {
+      console.log('ℹ️ Session reminders disabled via SESSION_REMINDERS_ENABLED');
+    }
+
     console.log('✅ Cron jobs scheduled:');
     console.log('   📧 Unread message notifications: Every 6 hours');
+    if (remindersEnabled) {
+      console.log(`   ⏰ Session reminders: ${remindersCron}`);
+    }
     
     this.isRunning = true;
   }
@@ -74,6 +93,28 @@ class CronScheduler {
   async testNotificationService() {
     console.log('🧪 Testing notification service...');
     return await this.runUnreadMessageNotifications();
+  }
+
+  // Run session reminders
+  async runSessionReminders() {
+    try {
+      console.log('⏰ Running scheduled session reminders...');
+      const startTime = Date.now();
+      const result = await this.sessionReminderService.run();
+      const duration = Date.now() - startTime;
+
+      console.log(`✅ Session reminders run completed in ${duration}ms`);
+      if (result?.totalReminders) {
+        console.log(`   🔔 Reminders sent: ${result.totalReminders}`);
+      }
+      if (result?.errors) {
+        console.warn(`   ⚠️ Errors: ${result.errors}`);
+      }
+      return result;
+    } catch (error) {
+      console.error('❌ Error in session reminders run:', error);
+      return { success: false, error: error.message };
+    }
   }
 }
 
