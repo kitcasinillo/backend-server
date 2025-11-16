@@ -20,6 +20,7 @@ const healerRoutes = require('./routes/healerRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const authRoutes = require('./routes/authRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const n8nRoutes = require('./routes/n8nRoutes');
 
@@ -113,6 +114,7 @@ app.use('/api', bookingRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api', n8nRoutes);
+app.use('/api', authRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
