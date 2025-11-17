@@ -23,6 +23,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const authRoutes = require('./routes/authRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const n8nRoutes = require('./routes/n8nRoutes');
+const retreatRoutes = require('./routes/retreatRoutes');
 
 // Import commission config for logging
 const COMMISSION_CONFIG = require('./config/commission');
@@ -106,6 +107,21 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Root route (avoid 404 for "/")
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'UltraHealers API is running',
+    health: '/health',
+    docs: 'See README or /health for status'
+  });
+});
+
+// Favicon (avoid noisy 404s)
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
+
 // API Routes
 app.use('/api', paymentRoutes);
 app.use('/api/healer', healerRoutes);
@@ -114,6 +130,7 @@ app.use('/api', bookingRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api', n8nRoutes);
+app.use('/api', retreatRoutes);
 app.use('/api', authRoutes);
 
 // Error handling middleware

@@ -41,9 +41,13 @@ NODE_ENV=development
 PORT=5001
 
 # Firebase Admin (Backend)
+# Choose ONE of the following methods:
+# 1) Escaped-newline PEM in env (works in most dashboards)
 FIREBASE_PROJECT_ID=your-project-id
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here\n-----END PRIVATE KEY-----\n"
 FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@your-project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----\nYour private key here\n-----END PRIVATE KEY-----\n
+# 2) Base64-encoded private key (reliable in cloud envs)
+# FIREBASE_PRIVATE_KEY_BASE64=ewo... (base64 of full JSON key contents)
 
 # Stripe (Backend)
 STRIPE_SECRET_KEY=sk_test_your_stripe_secret_key
@@ -73,6 +77,12 @@ JWT_SECRET=your-jwt-secret-key
    - **Build Command**: `npm install`
    - **Run Command**: `npm start`
    - **Port**: `5001`
+   - Recommended env setup for Firebase Admin:
+     - Use `FIREBASE_PRIVATE_KEY_BASE64` or ensure `FIREBASE_PRIVATE_KEY` uses `\n` for newlines without quotes.
+
+### Default Routes
+- `GET /` returns a simple JSON status (200) to avoid noisy 404s in platform probes.
+- `GET /favicon.ico` returns 204.
 
 ### Docker Deployment
 
