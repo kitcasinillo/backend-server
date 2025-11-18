@@ -24,6 +24,9 @@ const authRoutes = require('./routes/authRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const n8nRoutes = require('./routes/n8nRoutes');
 const retreatRoutes = require('./routes/retreatRoutes');
+const searchRoutes = require('./routes/searchRoutes');
+const modalitiesRoutes = require('./routes/modalitiesRoutes');
+const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
 
 // Import commission config for logging
 const COMMISSION_CONFIG = require('./config/commission');
@@ -44,6 +47,9 @@ initializeEmailTransporter();
 
 // Initialize settings (create defaults if not exist)
 initializeSettings().catch(err => console.error('Failed to initialize settings:', err));
+
+// Initialize modalities (seed defaults only if collection is empty)
+initializeModalitiesIfEmpty().catch(err => console.error('Failed to initialize modalities:', err));
 
 // Initialize notification scheduler
 initializeScheduler();
@@ -132,6 +138,8 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api', n8nRoutes);
 app.use('/api', retreatRoutes);
 app.use('/api', authRoutes);
+app.use('/api', searchRoutes);
+app.use('/api', modalitiesRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
