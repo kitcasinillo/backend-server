@@ -14,6 +14,11 @@ const DEFAULT_SETTINGS = {
     free_tier: ['basic_listings', 'messaging', 'basic_analytics'],
     premium_tier: ['unlimited_listings', 'advanced_analytics', 'priority_support', 'custom_branding']
   },
+  // New pricing configuration
+  pricing: {
+    free: { amount: 0, currency: 'USD' },
+    premium: { amount: 120, currency: 'USD' }
+  },
   created_at: new Date(),
   updated_at: new Date()
 };
@@ -99,7 +104,7 @@ const updateSettings = async (req, res) => {
       });
     }
 
-    const { listing_limit_free, listing_limit_premium, max_images_per_listing, max_file_size_mb, features } = req.body;
+    const { listing_limit_free, listing_limit_premium, max_images_per_listing, max_file_size_mb, features, pricing } = req.body;
 
     const settingsRef = doc(db, SETTINGS_COLLECTION, SETTINGS_DOC);
 
@@ -112,6 +117,7 @@ const updateSettings = async (req, res) => {
     if (max_images_per_listing !== undefined) updateData.max_images_per_listing = max_images_per_listing;
     if (max_file_size_mb !== undefined) updateData.max_file_size_mb = max_file_size_mb;
     if (features !== undefined) updateData.features = features;
+    if (pricing !== undefined) updateData.pricing = pricing;
 
     await setDoc(settingsRef, updateData, { merge: true });
 
@@ -169,20 +175,32 @@ const getHealerListingLimit = async (req, res) => {
       });
     }
 
-    const healerData = healerSnap.data();
-    const isPremium = healerData?.subscription_type === 'premium' || healerData?.is_premium === true;
+  const healerData = healerSnap.data();
+  const isPremium = healerData?.subscription_type === 'premium' || healerData?.is_premium === true;
 
-    const limit = isPremium ? settings.listing_limit_premium : settings.listing_limit_free;
+  const premiumLimitRaw = Number(settings.listing_limit_premium);
+  const freeLimitRaw = Number(settings.listing_limit_free);
+  const hasPremiumPositiveLimit = Number.isFinite(premiumLimitRaw) && premiumLimitRaw > 0;
+  const hasFreePositiveLimit = Number.isFinite(freeLimitRaw) && freeLimitRaw > 0;
 
-    res.json({
-      success: true,
-      data: {
-        healerId,
-        listing_limit: limit,
-        is_premium: isPremium,
-        subscription_type: healerData?.subscription_type || 'free'
-      }
-    });
+  const limit = isPremium
+    ? (hasPremiumPositiveLimit ? premiumLimitRaw : null)
+    : (hasFreePositiveLimit ? freeLimitRaw : 5);
+
+  const unlimited = isPremium
+    ? !hasPremiumPositiveLimit // Premium is unlimited only when premium limit is not set or <= 0
+    : false; // Free tier is never unlimited
+
+  res.json({
+    success: true,
+    data: {
+      healerId,
+      listing_limit: limit,
+      is_premium: isPremium,
+      subscription_type: healerData?.subscription_type || 'free',
+      unlimited
+    }
+  });
   } catch (error) {
     console.error('Error fetching healer listing limit:', error);
     res.status(500).json({

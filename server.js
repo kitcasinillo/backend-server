@@ -54,9 +54,17 @@ initializeModalitiesIfEmpty().catch(err => console.error('Failed to initialize m
 // Initialize notification scheduler
 initializeScheduler();
 
+// Stripe webhook MUST be defined before body parsers to preserve raw body
+const { handleWebhook } = require('./controllers/webhookController');
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), handleWebhook);
+
 // Middleware
 app.use(helmet());
-app.use(morgan('combined'));
+// Disable request logging by default; enable only if explicitly turned on
+const ENABLE_HTTP_LOGS = process.env.ENABLE_HTTP_LOGS === 'true';
+if (ENABLE_HTTP_LOGS) {
+  app.use(morgan(process.env.MORGAN_FORMAT || 'combined'));
+}
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
