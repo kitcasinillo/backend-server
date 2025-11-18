@@ -26,6 +26,7 @@ const n8nRoutes = require('./routes/n8nRoutes');
 const retreatRoutes = require('./routes/retreatRoutes');
 const searchRoutes = require('./routes/searchRoutes');
 const modalitiesRoutes = require('./routes/modalitiesRoutes');
+const disputeRoutes = require('./routes/disputeRoutes');
 const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
 
 // Import commission config for logging
@@ -151,6 +152,7 @@ app.use('/api', retreatRoutes);
 app.use('/api', authRoutes);
 app.use('/api', searchRoutes);
 app.use('/api', modalitiesRoutes);
+app.use('/api', disputeRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
