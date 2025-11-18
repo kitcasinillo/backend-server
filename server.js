@@ -27,6 +27,8 @@ const retreatRoutes = require('./routes/retreatRoutes');
 const searchRoutes = require('./routes/searchRoutes');
 const modalitiesRoutes = require('./routes/modalitiesRoutes');
 const disputeRoutes = require('./routes/disputeRoutes');
+const payoutRoutes = require('./routes/payoutRoutes');
+const payoutSettingsRoutes = require('./routes/payoutSettingsRoutes');
 const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
 
 // Import commission config for logging
@@ -148,6 +150,8 @@ app.use('/api', bookingRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api', n8nRoutes);
+app.use('/api/payouts', payoutRoutes);
+app.use('/api/payout-settings', payoutSettingsRoutes);
 app.use('/api', retreatRoutes);
 app.use('/api', authRoutes);
 app.use('/api', searchRoutes);

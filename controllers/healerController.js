@@ -91,9 +91,19 @@ const createStripeAccount = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error creating Stripe Connect account:', error);
+    const msg = error?.message || 'Unknown error';
+    const isStripeNotConnected = msg.toLowerCase().includes('connect') && msg.toLowerCase().includes('signed up');
+
+    if (isStripeNotConnected) {
+      return res.status(400).json({
+        success: false,
+        error: 'Stripe Connect is not enabled on your Stripe platform. Enable Connect in the Stripe dashboard (https://dashboard.stripe.com/connect) and use a secret key from that account.'
+      });
+    }
+
     res.status(500).json({
       success: false,
-      error: error.message
+      error: msg
     });
   }
 };

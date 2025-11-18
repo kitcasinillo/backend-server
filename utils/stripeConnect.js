@@ -1,4 +1,4 @@
-const { doc, getDoc, updateDoc } = require('firebase/firestore');
+const { doc, getDoc, setDoc, updateDoc } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 const { getStripe } = require('../config/stripe');
 
@@ -54,10 +54,15 @@ async function createHealerStripeAccount(healerId, healerEmail, healerName) {
     const db = getDatabase();
     if (db) {
       const profileRef = doc(db, 'profiles', healerId);
-      await updateDoc(profileRef, {
-        stripe_account_id: account.id,
-        updated_at: new Date().toISOString()
-      });
+      // Use setDoc with merge to avoid failures if the profile doc doesn't exist yet
+      await setDoc(
+        profileRef,
+        {
+          stripe_account_id: account.id,
+          updated_at: new Date().toISOString()
+        },
+        { merge: true }
+      );
     }
     
     console.log(`✅ Created Stripe Connect account for healer ${healerId}: ${account.id}`);
