@@ -63,22 +63,24 @@ router.post('/n8n/session-reminder', async (req, res) => {
   }
 });
 
-// Emit retreat.booking event (matches requested JSON shape)
+// Emit retreat.booking event (minimal structure only)
 router.post('/n8n/retreat-booking', async (req, res) => {
   try {
     const { retreatId, title, seeker, healer, location, dates, price } = req.body || {};
     if (!retreatId || !title || !seeker?.email || !healer?.email || !price?.amount || !price?.currency) {
       return res.status(400).json({ success: false, error: 'retreatId, title, seeker.email, healer.email, price.amount, price.currency are required' });
     }
-    const result = await sendEvent('retreat.booking', {
+    // Send minimal structure to n8n to match requested payload
+    const minimalPayload = {
       retreatId,
       title,
-      seeker,
-      healer,
+      seeker: { name: seeker?.name, email: seeker?.email },
+      healer: { name: healer?.name, email: healer?.email },
       location,
       dates,
       price,
-    }, { meta: { source: 'backend:n8nRoutes' } });
+    };
+    const result = await sendEvent('retreat.booking', minimalPayload, { meta: { source: 'backend:n8nRoutes' } });
     res.json({ success: true, result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
