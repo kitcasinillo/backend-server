@@ -112,6 +112,9 @@ app.use(cors({
   credentials: true
 }));
 
+// Explicitly enable CORS preflight across all routes (fixes 405 on OPTIONS in prod)
+app.options('*', cors());
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ 
