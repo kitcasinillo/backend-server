@@ -213,6 +213,7 @@ const createBooking = async (req, res) => {
       const bookingEventPayload = {
         id: bookingId,
         status: bookingData.paymentStatus === 'succeeded' ? 'confirmed' : (bookingData.paymentStatus || 'pending'),
+        listingName: bookingData.listingTitle || 'Untitled Service',
         seeker: {
           name: bookingData.seekerName,
           email: bookingData.seekerEmail,
