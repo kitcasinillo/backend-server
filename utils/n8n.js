@@ -14,6 +14,10 @@ const resolveUrl = (event) => {
   if (webhookUrl && webhookUrl.length > 0) return webhookUrl;
   if (!baseUrl || baseUrl.length === 0) return null;
   const trimmed = baseUrl.replace(/\/$/, '');
+  // Special-case disputes: n8n workflow expects consolidated endpoint /webhook/disputes
+  if (String(event).startsWith('dispute.')) {
+    return `${trimmed}/webhook/disputes`;
+  }
   // Default convention: single endpoint per event under /webhook/:event
   return `${trimmed}/webhook/${encodeURIComponent(event)}`;
 };

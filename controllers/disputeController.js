@@ -21,6 +21,24 @@ const outcomeStatusMap = {
   deny: 'denied'
 };
 
+// Helper to resolve a user's display name from profile
+async function resolveProfileName(db, userId) {
+  try {
+    if (!db || !userId) return null;
+    const ref = doc(db, 'profiles', userId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return null;
+    const d = snap.data() || {};
+    const first = d.first_name || '';
+    const last = d.last_name || '';
+    const full = `${first} ${last}`.trim();
+    return full || d.display_name || d.name || null;
+  } catch (e) {
+    console.warn('⚠️ Failed to resolve profile name for', userId, e?.message || e);
+    return null;
+  }
+}
+
 // Helper: basic validation
 function requireFields(obj, fields) {
   const missing = fields.filter((f) => obj[f] === undefined || obj[f] === null || obj[f] === '');
@@ -70,12 +88,20 @@ const createDispute = async (req, res) => {
 
     // Emit webhook event for email notification / workflow
     try {
+      // Resolve names to include in payload
+      const [seekerName, healerName] = await Promise.all([
+        resolveProfileName(db, disputeData.seekerId),
+        resolveProfileName(db, disputeData.healerId),
+      ]);
+
       await sendEvent('dispute.created', {
         id: createdRef.id,
         bookingId: disputeData.bookingId,
         type: disputeData.type,
         severity: disputeData.severity,
         status: disputeData.status,
+        seekerName: seekerName || null,
+        healerName: healerName || null,
         seeker: { id: disputeData.seekerId, email: disputeData.seekerEmail },
         healer: { id: disputeData.healerId, email: disputeData.healerEmail },
         requestedAmount: disputeData.requestedAmount,
@@ -245,12 +271,18 @@ const decide = async (req, res) => {
     await setDoc(ref, updated, { merge: true });
 
     try {
+      const [seekerName, healerName] = await Promise.all([
+        resolveProfileName(db, data.seekerId),
+        resolveProfileName(db, data.healerId),
+      ]);
       await sendEvent('dispute.resolved', {
         id,
         bookingId: data.bookingId,
         type: data.type,
         status,
         decision: updated.decision,
+        seekerName: seekerName || null,
+        healerName: healerName || null,
         seeker: { id: data.seekerId, email: data.seekerEmail },
         healer: { id: data.healerId, email: data.healerEmail }
       }, { meta: { source: 'backend:disputeController' } });
@@ -276,6 +308,10 @@ const notifyEmail = async (req, res) => {
     if (!snap.exists()) return res.status(404).json({ success: false, error: 'Not found' });
     const d = snap.data();
 
+    const [seekerName, healerName] = await Promise.all([
+      resolveProfileName(db, d.seekerId),
+      resolveProfileName(db, d.healerId),
+    ]);
     const payload = {
       id,
       bookingId: d.bookingId,
@@ -284,6 +320,8 @@ const notifyEmail = async (req, res) => {
       severity: d.severity,
       requestedAmount: d.requestedAmount,
       currency: d.currency,
+      seekerName: seekerName || null,
+      healerName: healerName || null,
       seeker: { id: d.seekerId, email: d.seekerEmail },
       healer: { id: d.healerId, email: d.healerEmail },
       submittedAt: d.submittedAt,

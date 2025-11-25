@@ -1,0 +1,15 @@
+{
+  "id": "d_test_001",
+  "bookingId": "b_123",
+  "type": "service_issue",
+  "severity": "normal",
+  "status": "open",
+  "seekerName": "Jane Doe",
+  "healerName": "John Healer",
+  "seeker": { "id": "u_seeker_1", "email": "jane@example.com" },
+  "healer": { "id": "u_healer_1", "email": "john@example.com" },
+  "requestedAmount": 50,
+  "currency": "USD",
+  "submittedAt": "2025-11-21T10:00:00.000Z",
+  "description": "Service quality did not meet expectations."
+}
