@@ -1,7 +1,7 @@
 const { getDatabase } = require('../config/database');
 const { getEmailTransporter } = require('../config/email');
 const { generateHealerEmail, generateSeekerEmail } = require('../utils/emailTemplates');
-const { collection, addDoc, query, where, getDocs } = require('firebase/firestore');
+const { collection, addDoc, query, where, getDocs, orderBy } = require('firebase/firestore');
 const { sendEvent: sendN8nEvent } = require('../utils/n8n');
 
 // In-memory cache for request deduplication
@@ -328,7 +328,42 @@ const sendChatMessage = async (req, res) => {
   }
 };
 
+// Get all bookings
+const getBookings = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const bookingsRef = collection(db, 'bookings');
+    const q = query(bookingsRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
+
+    const bookings = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: bookings
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching bookings:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createBooking,
+  getBookings,
   sendChatMessage
 };
