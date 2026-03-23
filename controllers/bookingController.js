@@ -1,7 +1,7 @@
 const { getDatabase } = require('../config/database');
 const { getEmailTransporter } = require('../config/email');
 const { generateHealerEmail, generateSeekerEmail } = require('../utils/emailTemplates');
-const { collection, addDoc, query, where, getDocs, orderBy } = require('firebase/firestore');
+const { collection, addDoc, query, where, getDocs, orderBy, doc, deleteDoc, updateDoc } = require('firebase/firestore');
 const { sendEvent: sendN8nEvent } = require('../utils/n8n');
 
 // In-memory cache for request deduplication
@@ -362,8 +362,43 @@ const getBookings = async (req, res) => {
   }
 };
 
+// Cancel (Delete) booking
+const cancelBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const bookingRef = doc(db, 'bookings', id);
+    await updateDoc(bookingRef, {
+      'status.booking-cancelled-by-admin': true,
+      'paymentStatus': 'cancelled',
+      'updatedAt': new Date().toISOString()
+    });
+
+    res.json({
+      success: true,
+      message: 'Booking cancelled (soft-deleted) successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error cancelling booking:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createBooking,
   getBookings,
-  sendChatMessage
+  sendChatMessage,
+  cancelBooking
 };
