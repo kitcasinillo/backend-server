@@ -438,10 +438,105 @@ const cancelBooking = async (req, res) => {
   }
 };
 
+// Get all retreat bookings
+const getRetreatBookings = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const bookingsRef = collection(db, 'retreat_bookings');
+    const q = query(bookingsRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
+
+    const bookings = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: bookings
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching retreat bookings:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Cancel Retreat Booking
+const cancelRetreatBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    // Try updating in retreat_bookings first
+    const retreatRef = doc(db, 'retreat_bookings', id);
+    const { getDoc } = require('firebase/firestore');
+    const retreatSnap = await getDoc(retreatRef);
+
+    if (retreatSnap.exists()) {
+      await updateDoc(retreatRef, {
+        'paymentStatus': 'cancelled',
+        'updatedAt': new Date().toISOString()
+      });
+      return res.json({
+        success: true,
+        message: 'Retreat enrollment cancelled successfully'
+      });
+    }
+
+    // fallback to main bookings collection
+    const bookingRef = doc(db, 'bookings', id);
+    const bookingSnap = await getDoc(bookingRef);
+
+    if (bookingSnap.exists()) {
+       await updateDoc(bookingRef, {
+        'status.booking-cancelled-by-admin': true,
+        'paymentStatus': 'cancelled',
+        'updatedAt': new Date().toISOString()
+      });
+      return res.json({
+        success: true,
+        message: 'Retreat enrollment (from bookings) cancelled successfully'
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Booking not found in any collection'
+    });
+
+  } catch (error) {
+    console.error('❌ Error cancelling retreat booking:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createBooking,
   getBookings,
   getBooking,
   sendChatMessage,
-  cancelBooking
+  cancelBooking,
+  getRetreatBookings,
+  cancelRetreatBooking
 };
