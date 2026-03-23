@@ -531,6 +531,63 @@ const cancelRetreatBooking = async (req, res) => {
   }
 };
 
+// Get single retreat booking
+const getRetreatBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const { getDoc } = require('firebase/firestore');
+
+    // Try retreat_bookings first
+    const retreatRef = doc(db, 'retreat_bookings', id);
+    const retreatSnap = await getDoc(retreatRef);
+
+    if (retreatSnap.exists()) {
+      return res.json({
+        success: true,
+        data: {
+          id: retreatSnap.id,
+          ...retreatSnap.data()
+        }
+      });
+    }
+
+    // Fallback to bookings
+    const bookingRef = doc(db, 'bookings', id);
+    const bookingSnap = await getDoc(bookingRef);
+
+    if (bookingSnap.exists()) {
+      return res.json({
+        success: true,
+        data: {
+          id: bookingSnap.id,
+          ...bookingSnap.data()
+        }
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Retreat booking not found'
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching retreat booking:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createBooking,
   getBookings,
@@ -538,5 +595,6 @@ module.exports = {
   sendChatMessage,
   cancelBooking,
   getRetreatBookings,
-  cancelRetreatBooking
+  cancelRetreatBooking,
+  getRetreatBooking
 };

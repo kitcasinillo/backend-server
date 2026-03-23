@@ -1,5 +1,5 @@
 const express = require('express');
-const { createBooking, getBookings, getBooking, sendChatMessage, cancelBooking, getRetreatBookings, cancelRetreatBooking } = require('../controllers/bookingController');
+const { createBooking, getBookings, getBooking, sendChatMessage, cancelBooking, getRetreatBookings, cancelRetreatBooking, getRetreatBooking } = require('../controllers/bookingController');
 
 const router = express.Router();
 
@@ -12,6 +12,7 @@ router.get('/retreat-bookings', getRetreatBookings);
 
 // Get a single booking
 router.get('/bookings/:id', getBooking);
+router.get('/retreat-bookings/:id', getRetreatBooking);
 
 // Cancel booking
 router.post('/bookings/cancel/:id', cancelBooking);
