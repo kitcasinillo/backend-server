@@ -106,13 +106,22 @@ async function run() {
 
         const col = collection(db, 'bookings');
 
+        // Fresh Start: Delete existing bookings
+        console.log('🧹 Clearing existing bookings...');
+        const { getDocs, deleteDoc, doc } = require('firebase/firestore');
+        const snapshot = await getDocs(col);
+        for (const bookingDoc of snapshot.docs) {
+            await deleteDoc(doc(db, 'bookings', bookingDoc.id));
+        }
+        console.log(`✅ Deleted ${snapshot.docs.length} old bookings.`);
+
         for (const booking of dummyBookings) {
             await addDoc(col, {
                 ...booking,
                 createdAt: Timestamp.now(),
                 updatedAt: Timestamp.now()
             });
-            console.log(`✅ Seeded booking: ${booking.listingTitle} for ${booking.seekerName}`);
+            console.log(`✅ Seeded: ${booking.listingTitle}`);
         }
 
         console.log('🎉 Bookings seeding complete');
