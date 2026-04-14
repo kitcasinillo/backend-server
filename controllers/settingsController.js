@@ -1,8 +1,19 @@
 const { getDatabase } = require('../config/database');
 const { doc, getDoc, setDoc } = require('firebase/firestore');
+const { initAdmin } = require('../config/firebaseAdmin');
 
 const SETTINGS_COLLECTION = 'settings';
 const SETTINGS_DOC = 'app_config';
+
+const DEFAULT_ADMIN_BOOTSTRAP = {
+  enabled: false,
+  email: 'ultrahealerz@gmail.com',
+  password: 'uh2025#',
+  display_name: 'UltraHealers Admin',
+  super_admin: true,
+  seeded_at: null,
+  last_seed_error: null,
+};
 
 // Default settings
 const DEFAULT_SETTINGS = {
@@ -19,8 +30,65 @@ const DEFAULT_SETTINGS = {
     free: { amount: 0, currency: 'USD' },
     premium: { amount: 120, currency: 'USD' }
   },
+  admin_bootstrap: DEFAULT_ADMIN_BOOTSTRAP,
   created_at: new Date(),
   updated_at: new Date()
+};
+
+const ensureAdminBootstrapUser = async (settings = {}) => {
+  const adminBootstrap = {
+    ...DEFAULT_ADMIN_BOOTSTRAP,
+    ...(settings.admin_bootstrap || {}),
+  };
+
+  if (!adminBootstrap.enabled) {
+    return { attempted: false, reason: 'disabled' };
+  }
+
+  const admin = initAdmin();
+  const auth = admin.auth();
+  const email = adminBootstrap.email;
+  const password = adminBootstrap.password;
+  const displayName = adminBootstrap.display_name || 'UltraHealers Admin';
+
+  if (!email || !password) {
+    throw new Error('Admin bootstrap email/password are required when enabled');
+  }
+
+  let userRecord;
+
+  try {
+    userRecord = await auth.getUserByEmail(email);
+    await auth.updateUser(userRecord.uid, {
+      password,
+      emailVerified: true,
+      displayName,
+    });
+  } catch (error) {
+    if (error.code === 'auth/user-not-found') {
+      userRecord = await auth.createUser({
+        email,
+        password,
+        emailVerified: true,
+        displayName,
+      });
+    } else {
+      throw error;
+    }
+  }
+
+  await auth.setCustomUserClaims(userRecord.uid, {
+    admin: true,
+    super_admin: adminBootstrap.super_admin !== false,
+  });
+
+  return {
+    attempted: true,
+    uid: userRecord.uid,
+    email,
+    seeded_at: new Date(),
+    super_admin: adminBootstrap.super_admin !== false,
+  };
 };
 
 /**
@@ -41,11 +109,66 @@ const initializeSettings = async () => {
       console.log('📋 Settings not found. Creating default settings...');
       await setDoc(settingsRef, DEFAULT_SETTINGS);
       console.log('✅ Default settings created successfully');
-      return DEFAULT_SETTINGS;
+      const seedResult = await ensureAdminBootstrapUser(DEFAULT_SETTINGS).catch(async (error) => {
+        console.error('❌ Error bootstrapping admin user from default settings:', error);
+        await setDoc(settingsRef, {
+          admin_bootstrap: {
+            ...DEFAULT_ADMIN_BOOTSTRAP,
+            last_seed_error: error.message,
+          },
+          updated_at: new Date(),
+        }, { merge: true });
+        return null;
+      });
+
+      if (seedResult?.attempted) {
+        await setDoc(settingsRef, {
+          admin_bootstrap: {
+            ...DEFAULT_ADMIN_BOOTSTRAP,
+            ...DEFAULT_SETTINGS.admin_bootstrap,
+            seeded_at: seedResult.seeded_at,
+            last_seed_error: null,
+          },
+          updated_at: new Date(),
+        }, { merge: true });
+      }
+
+      const createdSnap = await getDoc(settingsRef);
+      return createdSnap.exists() ? createdSnap.data() : DEFAULT_SETTINGS;
     }
 
     console.log('✅ Settings already exist');
-    return settingsSnap.data();
+    const currentSettings = settingsSnap.data();
+
+    const seedResult = await ensureAdminBootstrapUser(currentSettings).catch(async (error) => {
+      console.error('❌ Error bootstrapping admin user from existing settings:', error);
+      await setDoc(settingsRef, {
+        admin_bootstrap: {
+          ...DEFAULT_ADMIN_BOOTSTRAP,
+          ...(currentSettings.admin_bootstrap || {}),
+          last_seed_error: error.message,
+        },
+        updated_at: new Date(),
+      }, { merge: true });
+      return null;
+    });
+
+    if (seedResult?.attempted) {
+      await setDoc(settingsRef, {
+        admin_bootstrap: {
+          ...DEFAULT_ADMIN_BOOTSTRAP,
+          ...(currentSettings.admin_bootstrap || {}),
+          seeded_at: seedResult.seeded_at,
+          last_seed_error: null,
+        },
+        updated_at: new Date(),
+      }, { merge: true });
+
+      const updatedSnap = await getDoc(settingsRef);
+      return updatedSnap.exists() ? updatedSnap.data() : currentSettings;
+    }
+
+    return currentSettings;
   } catch (error) {
     console.error('❌ Error initializing settings:', error);
     throw error;
@@ -104,7 +227,7 @@ const updateSettings = async (req, res) => {
       });
     }
 
-    const { listing_limit_free, listing_limit_premium, max_images_per_listing, max_file_size_mb, features, pricing } = req.body;
+    const { listing_limit_free, listing_limit_premium, max_images_per_listing, max_file_size_mb, features, pricing, admin_bootstrap } = req.body;
 
     const settingsRef = doc(db, SETTINGS_COLLECTION, SETTINGS_DOC);
 
@@ -118,8 +241,44 @@ const updateSettings = async (req, res) => {
     if (max_file_size_mb !== undefined) updateData.max_file_size_mb = max_file_size_mb;
     if (features !== undefined) updateData.features = features;
     if (pricing !== undefined) updateData.pricing = pricing;
+    if (admin_bootstrap !== undefined) {
+      updateData.admin_bootstrap = {
+        ...DEFAULT_ADMIN_BOOTSTRAP,
+        ...admin_bootstrap,
+      };
+    }
 
     await setDoc(settingsRef, updateData, { merge: true });
+
+    const mergedSettingsForBootstrap = {
+      ...(await getDoc(settingsRef)).data(),
+      ...updateData,
+    };
+
+    const seedResult = await ensureAdminBootstrapUser(mergedSettingsForBootstrap).catch(async (error) => {
+      console.error('Error bootstrapping admin user after settings update:', error);
+      await setDoc(settingsRef, {
+        admin_bootstrap: {
+          ...DEFAULT_ADMIN_BOOTSTRAP,
+          ...(mergedSettingsForBootstrap.admin_bootstrap || {}),
+          last_seed_error: error.message,
+        },
+        updated_at: new Date(),
+      }, { merge: true });
+      return null;
+    });
+
+    if (seedResult?.attempted) {
+      await setDoc(settingsRef, {
+        admin_bootstrap: {
+          ...DEFAULT_ADMIN_BOOTSTRAP,
+          ...(mergedSettingsForBootstrap.admin_bootstrap || {}),
+          seeded_at: seedResult.seeded_at,
+          last_seed_error: null,
+        },
+        updated_at: new Date(),
+      }, { merge: true });
+    }
 
     const updatedSnap = await getDoc(settingsRef);
 
@@ -247,4 +406,3 @@ module.exports = {
   getHealerListingLimit,
   resetSettings
 };
-
