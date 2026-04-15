@@ -1,5 +1,5 @@
 const { getDatabase } = require('../config/database');
-const { collection, getDocs, query, where, limit } = require('firebase/firestore');
+const { collection, getDocs, query, limit } = require('firebase/firestore');
 
 // Map Firestore healer profile to search result shape expected by seeker app
 const mapHealerToSearchResult = (doc) => {
@@ -20,9 +20,6 @@ const mapHealerToSearchResult = (doc) => {
   };
 };
 
-// Simplified search: focus only on modalities for now
-
-// Helper: map modality slug to common labels used in profiles
 const modalityLabelMap = {
   'reiki': ['reiki'],
   'acupuncture': ['acupuncture'],
@@ -40,7 +37,6 @@ const modalityLabelMap = {
 
 const normalizeModalities = (mods = []) => {
   if (!Array.isArray(mods)) return [];
-  // Expand each requested slug into possible profile labels without using flatMap
   const expanded = [];
   for (const m of mods) {
     const mapped = modalityLabelMap[m] || [m];
@@ -48,7 +44,6 @@ const normalizeModalities = (mods = []) => {
       expanded.push(val);
     }
   }
-  // Lowercase and dedupe
   const lowered = expanded.map((x) => String(x).toLowerCase().trim());
   return Array.from(new Set(lowered));
 };
@@ -62,7 +57,6 @@ const searchHealers = async (req, res) => {
     }
 
     const params = req.body || {};
-    // Fetch broadly (remove strict constraints to increase matches in limited data)
     const q = query(collection(db, 'profiles'), limit(150));
     const snapshot = await getDocs(q);
 
@@ -71,11 +65,9 @@ const searchHealers = async (req, res) => {
     let filtered = snapshot.docs.filter((doc) => {
       try {
         const d = doc.data() || {};
-        // Ensure only healer profiles are considered if role exists
         if (d.role && String(d.role).toLowerCase() !== 'healer') {
           return false;
         }
-        // No modality filter: return all
         if (!Array.isArray(params.modalities) || params.modalities.length === 0 || params.modalities.includes('open-to-anything')) {
           return true;
         }
@@ -88,7 +80,6 @@ const searchHealers = async (req, res) => {
       }
     });
 
-    // Early-stage data: if no matches, fall back to showing all
     if (filtered.length === 0) {
       filtered = snapshot.docs;
     }
@@ -103,4 +94,53 @@ const searchHealers = async (req, res) => {
   }
 };
 
-module.exports = { searchHealers };
+// GET /api/healers/admin-search
+const adminSearchHealers = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({ success: false, error: 'Database not initialized' });
+    }
+
+    const search = String(req.query.q || '').toLowerCase().trim();
+    const snapshot = await getDocs(query(collection(db, 'profiles'), limit(150)));
+
+    const results = snapshot.docs
+      .map((doc) => {
+        const d = doc.data() || {};
+        if (d.role && String(d.role).toLowerCase() !== 'healer') {
+          return null;
+        }
+
+        const firstName = d.first_name || '';
+        const lastName = d.last_name || '';
+        const name = `${firstName} ${lastName}`.trim() || d.display_name || d.name || 'Healer';
+        const email = d.email || d.contact_email || '';
+        const rawStripeStatus = String(d.stripe_connect_status || (d.stripe_account_id ? 'active' : 'pending')).toLowerCase();
+        const stripeStatus = rawStripeStatus === 'active' || rawStripeStatus === 'restricted' ? rawStripeStatus : 'pending';
+
+        return {
+          id: doc.id,
+          name,
+          email,
+          stripeStatus,
+          stripeAccountId: d.stripe_account_id || '',
+        };
+      })
+      .filter(Boolean)
+      .filter((item) => {
+        if (!search) return true;
+        return [item.name, item.email, item.id, item.stripeAccountId]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(search));
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return res.json({ success: true, results });
+  } catch (error) {
+    console.error('❌ Error admin-searching healers:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+module.exports = { searchHealers, adminSearchHealers };
