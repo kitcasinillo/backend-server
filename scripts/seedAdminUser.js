@@ -1,23 +1,18 @@
-const fs = require('fs');
-const path = require('path');
-const { initializeApp, cert } = require('firebase-admin/app');
-const { getAuth } = require('firebase-admin/auth');
+const { initAdmin } = require('../config/firebaseAdmin');
 
-const serviceAccountPath = path.resolve(__dirname, '../serviceAccountKey.json');
+let adminAuth;
 
-if (!fs.existsSync(serviceAccountPath)) {
-  console.error('❌ serviceAccountKey.json not found at expected path:', serviceAccountPath);
-  console.error('Please add the Firebase Admin service account JSON to backend-server/serviceAccountKey.json');
+try {
+  const admin = initAdmin();
+  adminAuth = admin.auth();
+} catch (error) {
+  console.error('❌ Failed to initialize Firebase Admin for seed script:', error.message);
+  console.error('Supported options:');
+  console.error('1. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY');
+  console.error('2. Set GOOGLE_APPLICATION_CREDENTIALS to a service account file path');
+  console.error('3. Keep using backend-server/serviceAccountKey.json if your env loader maps it into FIREBASE_* vars first');
   process.exit(1);
 }
-
-const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf-8'));
-
-initializeApp({
-  credential: cert(serviceAccount),
-});
-
-const adminAuth = getAuth();
 
 const adminEmail = process.env.ADMIN_SEED_EMAIL || 'ultrahealerz@gmail.com';
 const adminPassword = process.env.ADMIN_SEED_PASSWORD || 'uh2025#';
