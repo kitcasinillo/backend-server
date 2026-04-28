@@ -31,6 +31,7 @@ const payoutRoutes = require('./routes/payoutRoutes');
 const payoutSettingsRoutes = require('./routes/payoutSettingsRoutes');
 const adminUserRoutes = require('./routes/adminUserRoutes');
 const adminListingRoutes = require('./routes/adminListingRoutes');
+const adminBookingRoutes = require('./routes/adminBookingRoutes');
 const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
 
 // Import commission config for logging
@@ -161,6 +162,7 @@ app.use('/api', modalitiesRoutes);
 app.use('/api', disputeRoutes);
 app.use('/api', adminUserRoutes);
 app.use('/api', adminListingRoutes);
+app.use('/api', adminBookingRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
