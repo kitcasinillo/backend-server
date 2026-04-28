@@ -1,4 +1,4 @@
-const { collection, doc, getDoc, getDocs, limit, query, where } = require('firebase/firestore');
+const { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 
 const PROFILES_COLLECTION = 'profiles';
@@ -199,9 +199,60 @@ const getSeekerDetail = async (req, res) => {
   }
 };
 
+const updateUserSuspension = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const { suspended, reason = null } = req.body || {};
+
+    if (typeof suspended !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'suspended boolean is required' });
+    }
+
+    const profileRef = doc(db, PROFILES_COLLECTION, id);
+    const profileSnap = await getDoc(profileRef);
+    if (!profileSnap.exists()) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const previous = profileSnap.data() || {};
+    const nextStatus = suspended ? 'suspended' : 'active';
+    const updatedAt = new Date().toISOString();
+
+    await updateDoc(profileRef, {
+      status: nextStatus,
+      account_status: nextStatus,
+      suspended,
+      is_suspended: suspended,
+      suspension_reason: suspended ? reason : null,
+      suspended_at: suspended ? updatedAt : null,
+      unsuspended_at: suspended ? null : updatedAt,
+      updated_at: updatedAt,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        id,
+        previousStatus: userStatusFromProfile(previous),
+        status: suspended ? 'Suspended' : 'Active',
+        suspended,
+        reason: suspended ? reason : null,
+        updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error updating admin user suspension:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   listHealers,
   listSeekers,
   getHealerDetail,
   getSeekerDetail,
+  updateUserSuspension,
 };
