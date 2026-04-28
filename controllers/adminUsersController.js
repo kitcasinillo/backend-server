@@ -91,22 +91,63 @@ const listProfilesByRole = async (role) => {
   return snapshot.docs;
 };
 
-const listHealers = async (_req, res) => {
+const matchesSearch = (item, search) => {
+  if (!search) return true;
+  const haystack = [item.id, item.name, item.email, item.location, item.stripeAccountId]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+  return haystack.some((value) => value.includes(search));
+};
+
+const listHealers = async (req, res) => {
   try {
     const docs = await listProfilesByRole('healer');
-    const results = docs.map(mapHealerListItem).sort((a, b) => a.name.localeCompare(b.name));
-    return res.json({ success: true, results });
+    const search = String(req.query.q || '').toLowerCase().trim();
+    const requestedStatus = String(req.query.status || '').trim();
+    const requestedSubscription = String(req.query.subscription || '').trim();
+
+    const results = docs
+      .map(mapHealerListItem)
+      .filter((item) => matchesSearch(item, search))
+      .filter((item) => !requestedStatus || item.status === requestedStatus)
+      .filter((item) => !requestedSubscription || item.subscription === requestedSubscription)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return res.json({
+      success: true,
+      results,
+      filters: {
+        q: req.query.q || '',
+        status: requestedStatus || '',
+        subscription: requestedSubscription || '',
+      },
+    });
   } catch (error) {
     console.error('❌ Error listing healers for admin:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 };
 
-const listSeekers = async (_req, res) => {
+const listSeekers = async (req, res) => {
   try {
     const docs = await listProfilesByRole('seeker');
-    const results = docs.map(mapSeekerListItem).sort((a, b) => a.name.localeCompare(b.name));
-    return res.json({ success: true, results });
+    const search = String(req.query.q || '').toLowerCase().trim();
+    const requestedStatus = String(req.query.status || '').trim();
+
+    const results = docs
+      .map(mapSeekerListItem)
+      .filter((item) => matchesSearch(item, search))
+      .filter((item) => !requestedStatus || item.status === requestedStatus)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return res.json({
+      success: true,
+      results,
+      filters: {
+        q: req.query.q || '',
+        status: requestedStatus || '',
+      },
+    });
   } catch (error) {
     console.error('❌ Error listing seekers for admin:', error);
     return res.status(500).json({ success: false, error: error.message });
