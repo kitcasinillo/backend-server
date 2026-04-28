@@ -1,4 +1,4 @@
-const { collection, deleteDoc, doc, getDoc, getDocs, limit, query, updateDoc } = require('firebase/firestore');
+const { collection, deleteDoc, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 
 const RETREAT_LISTINGS_COLLECTION = 'retreat_listings';
@@ -25,6 +25,7 @@ const normalizeStatus = (value) => {
   if (['active', 'approved', 'published', 'live'].includes(raw)) return 'active';
   if (['inactive', 'hidden', 'paused'].includes(raw)) return 'inactive';
   if (['full', 'sold_out', 'soldout'].includes(raw)) return 'full';
+  if (['finished', 'completed', 'ended', 'done'].includes(raw)) return 'finished';
   if (['pending_review', 'pending', 'review'].includes(raw)) return 'pending_review';
   return raw;
 };
@@ -43,11 +44,13 @@ const loadProfiles = async (db) => {
   }));
 };
 
+const sanitizeRichText = (value) => typeof value === 'string' ? value.trim() : '';
+
 const buildRetreatBase = (id, data, profileMap) => {
   const host = profileMap.get(data.healerId || data.hostId || data.userId || '') || null;
   const price = toNumber(data.pricePerPerson || data.price, 0);
-  const capacity = toNumber(data.maxParticipants || data.capacity, 0);
-  const bookedSpots = toNumber(data.bookedSpots || data.booked_spots || data.participantsBooked || data.participants, 0);
+  const capacity = Math.max(0, toNumber(data.maxParticipants || data.capacity, 0));
+  const bookedSpots = Math.max(0, toNumber(data.bookedSpots || data.booked_spots || data.participantsBooked || data.participants, 0));
   const status = normalizeStatus(data.status);
 
   return {
@@ -75,7 +78,7 @@ const buildRetreatBase = (id, data, profileMap) => {
 };
 
 const loadRetreatBookings = async (db) => {
-  const bookingSnap = await getDocs(query(collection(db, BOOKINGS_COLLECTION), limit(500)));
+  const bookingSnap = await getDocs(query(collection(db, BOOKINGS_COLLECTION), limit(800)));
   return bookingSnap.docs.map((bookingDoc) => ({ id: bookingDoc.id, ...(bookingDoc.data() || {}) }));
 };
 
@@ -95,7 +98,13 @@ const groupEnrollmentsByRetreat = (bookings, profileMap) => {
       amount: toNumber(booking.amount, 0),
       date: toIsoOrNull(booking.createdAt || booking.created_at || booking.sessionDate),
       status: booking.paymentStatus || 'pending',
-      bookingStatus: typeof booking.status === 'string' ? booking.status : (booking.status?.['booking-marked-as-complete-by-seeker'] ? 'completed' : booking.status?.['booking-confirmed-by-healer'] ? 'confirmed' : 'pending_confirmation'),
+      bookingStatus: typeof booking.status === 'string'
+        ? booking.status
+        : (booking.status?.['booking-marked-as-complete-by-seeker']
+          ? 'completed'
+          : booking.status?.['booking-confirmed-by-healer']
+            ? 'confirmed'
+            : 'pending_confirmation'),
     };
 
     const list = grouped.get(booking.listingId) || [];
@@ -104,6 +113,22 @@ const groupEnrollmentsByRetreat = (bookings, profileMap) => {
   }
 
   return grouped;
+};
+
+const computeDerivedRetreat = (base, enrollments) => {
+  const bookedSpots = Math.max(0, enrollments.length || base.bookedSpots || 0);
+  const revenue = enrollments.reduce((sum, item) => sum + toNumber(item.amount, 0), 0);
+  const safeRevenue = Number.isFinite(revenue) && revenue > 0 ? revenue : bookedSpots * toNumber(base.price, 0);
+  const capacity = Math.max(0, toNumber(base.capacity, 0));
+  const status = capacity > 0 && bookedSpots >= capacity ? 'full' : base.status;
+
+  return {
+    ...base,
+    capacity,
+    bookedSpots,
+    revenue: Number.isFinite(safeRevenue) ? safeRevenue : 0,
+    status,
+  };
 };
 
 const listAdminRetreats = async (req, res) => {
@@ -130,15 +155,7 @@ const listAdminRetreats = async (req, res) => {
       .map((docSnap) => {
         const base = buildRetreatBase(docSnap.id, docSnap.data() || {}, profileMap);
         const enrollments = enrollmentsByRetreat.get(docSnap.id) || [];
-        const bookedSpots = enrollments.length || base.bookedSpots;
-        const revenue = enrollments.reduce((sum, item) => sum + toNumber(item.amount, 0), 0) || (bookedSpots * base.price);
-        const nextStatus = bookedSpots >= base.capacity && base.capacity > 0 ? 'full' : base.status;
-        return {
-          ...base,
-          bookedSpots,
-          revenue,
-          status: nextStatus,
-        };
+        return computeDerivedRetreat(base, enrollments);
       })
       .filter((item) => {
         if (statusFilters.length > 0 && !statusFilters.includes(item.status)) return false;
@@ -159,6 +176,7 @@ const listAdminRetreats = async (req, res) => {
       total: retreats.length,
       pending: retreats.filter((item) => item.status === 'pending_review').length,
       active: retreats.filter((item) => item.status === 'active').length,
+      finished: retreats.filter((item) => item.status === 'finished').length,
     };
 
     return res.json({ success: true, retreats, summary });
@@ -184,20 +202,15 @@ const getAdminRetreatById = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Retreat not found' });
     }
 
-    const retreat = buildRetreatBase(id, retreatSnap.data() || {}, profileMap);
+    const base = buildRetreatBase(id, retreatSnap.data() || {}, profileMap);
     const enrollmentsByRetreat = groupEnrollmentsByRetreat(bookings, profileMap);
     const enrollments = (enrollmentsByRetreat.get(id) || []).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-    const bookedSpots = enrollments.length || retreat.bookedSpots;
-    const revenue = enrollments.reduce((sum, item) => sum + toNumber(item.amount, 0), 0) || (bookedSpots * retreat.price);
-    const status = bookedSpots >= retreat.capacity && retreat.capacity > 0 ? 'full' : retreat.status;
+    const retreat = computeDerivedRetreat(base, enrollments);
 
     return res.json({
       success: true,
       retreat: {
         ...retreat,
-        bookedSpots,
-        revenue,
-        status,
         enrollments,
       },
     });
@@ -214,8 +227,9 @@ const updateAdminRetreatStatus = async (req, res) => {
 
     const { id } = req.params;
     const { status } = req.body || {};
-    const allowed = new Set(['active', 'inactive', 'draft', 'pending_review', 'full']);
-    if (!allowed.has(String(status))) {
+    const normalized = normalizeStatus(status);
+    const allowed = new Set(['active', 'inactive', 'draft', 'pending_review', 'full', 'finished']);
+    if (!allowed.has(normalized)) {
       return res.status(400).json({ success: false, error: 'Unsupported retreat status' });
     }
 
@@ -226,11 +240,11 @@ const updateAdminRetreatStatus = async (req, res) => {
     }
 
     await updateDoc(retreatRef, {
-      status,
+      status: normalized,
       updatedAt: new Date().toISOString(),
     });
 
-    return res.json({ success: true, data: { id, status } });
+    return res.json({ success: true, data: { id, status: normalized } });
   } catch (error) {
     console.error('❌ Error updating admin retreat status:', error);
     return res.status(500).json({ success: false, error: error.message });
@@ -240,6 +254,83 @@ const updateAdminRetreatStatus = async (req, res) => {
 const approveAdminRetreat = async (req, res) => {
   req.body = { ...(req.body || {}), status: 'active' };
   return updateAdminRetreatStatus(req, res);
+};
+
+const updateAdminRetreatFields = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const retreatRef = doc(db, RETREAT_LISTINGS_COLLECTION, id);
+    const retreatSnap = await getDoc(retreatRef);
+    if (!retreatSnap.exists()) {
+      return res.status(404).json({ success: false, error: 'Retreat not found' });
+    }
+
+    const payload = req.body || {};
+    const updates = {
+      title: typeof payload.title === 'string' ? payload.title.trim() : undefined,
+      location: typeof payload.location === 'string' ? payload.location.trim() : undefined,
+      price: payload.price !== undefined ? toNumber(payload.price, 0) : undefined,
+      pricePerPerson: payload.price !== undefined ? toNumber(payload.price, 0) : undefined,
+      capacity: payload.capacity !== undefined ? Math.max(0, toNumber(payload.capacity, 0)) : undefined,
+      maxParticipants: payload.capacity !== undefined ? Math.max(0, toNumber(payload.capacity, 0)) : undefined,
+      startDate: payload.startDate ? String(payload.startDate) : undefined,
+      endDate: payload.endDate ? String(payload.endDate) : undefined,
+      description: payload.shortDescription !== undefined ? sanitizeRichText(payload.shortDescription) : undefined,
+      shortDescription: payload.shortDescription !== undefined ? sanitizeRichText(payload.shortDescription) : undefined,
+      detailedDescription: payload.longDescription !== undefined ? sanitizeRichText(payload.longDescription) : undefined,
+      longDescription: payload.longDescription !== undefined ? sanitizeRichText(payload.longDescription) : undefined,
+      updatedAt: new Date().toISOString(),
+    };
+
+    Object.keys(updates).forEach((key) => updates[key] === undefined && delete updates[key]);
+    await updateDoc(retreatRef, updates);
+
+    return res.json({ success: true, data: { id, updated: updates } });
+  } catch (error) {
+    console.error('❌ Error updating retreat fields:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+const messageAllRetreatSeekers = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const { subject, message } = req.body || {};
+    if (!String(subject || '').trim() || !String(message || '').trim()) {
+      return res.status(400).json({ success: false, error: 'subject and message are required' });
+    }
+
+    const bookingSnap = await getDocs(query(collection(db, BOOKINGS_COLLECTION), where('listingId', '==', id), limit(500)));
+    const recipients = bookingSnap.docs
+      .map((docSnap) => docSnap.data() || {})
+      .filter((booking) => [booking.format, booking.modality, booking.listingTitle, booking.title].filter(Boolean).join(' ').toLowerCase().includes('retreat'))
+      .map((booking) => ({
+        seekerId: booking.seekerId || null,
+        email: booking.seekerEmail || '',
+        name: booking.seekerName || 'Unknown Seeker',
+        subject: String(subject).trim(),
+        message: String(message).trim(),
+      }))
+      .filter((recipient) => recipient.email);
+
+    return res.json({
+      success: true,
+      data: {
+        count: recipients.length,
+        recipients,
+        mode: 'mailto_fallback',
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error building retreat seeker message payload:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
 };
 
 const deleteAdminRetreat = async (req, res) => {
@@ -267,5 +358,7 @@ module.exports = {
   getAdminRetreatById,
   updateAdminRetreatStatus,
   approveAdminRetreat,
+  updateAdminRetreatFields,
+  messageAllRetreatSeekers,
   deleteAdminRetreat,
 };
