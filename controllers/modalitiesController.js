@@ -1,4 +1,4 @@
-const { collection, getDocs, getDoc, query, orderBy, limit, doc, setDoc } = require('firebase/firestore');
+const { collection, getDocs, getDoc, query, orderBy, limit, doc, setDoc, deleteDoc } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 const seedModalities = require('../models/modalitiesSeedData');
 
@@ -64,9 +64,66 @@ const createModality = async (req, res) => {
   }
 };
 
+const updateModality = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const updates = req.body;
+    const ref = doc(db, 'modalities', id);
+
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) {
+      return res.status(404).json({ success: false, error: 'Modality not found' });
+    }
+
+    const updatedData = { ...updates, updated_at: new Date().toISOString() };
+    if (updatedData.name) {
+      updatedData.label = updatedData.name;
+    }
+
+    await setDoc(ref, updatedData, { merge: true });
+    
+    return res.json({ success: true, modality: { id, ...snapshot.data(), ...updatedData } });
+  } catch (error) {
+    console.error('Error updating modality:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+const deleteModality = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const ref = doc(db, 'modalities', id);
+
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) {
+      return res.status(404).json({ success: false, error: 'Modality not found' });
+    }
+
+    // Optional: check if listingsCount > 0
+    if (snapshot.data().listingsCount > 0) {
+      return res.status(400).json({ success: false, error: 'Cannot delete modality with active listings' });
+    }
+
+    await deleteDoc(ref);
+    
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting modality:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getAllModalities,
   createModality,
+  updateModality,
+  deleteModality,
   initializeModalitiesIfEmpty: async () => {
     try {
       const db = getDatabase();
