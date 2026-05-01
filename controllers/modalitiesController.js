@@ -1,4 +1,4 @@
-const { collection, getDocs, query, orderBy, limit, doc, setDoc } = require('firebase/firestore');
+const { collection, getDocs, getDoc, query, orderBy, limit, doc, setDoc } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 const seedModalities = require('../models/modalitiesSeedData');
 
@@ -21,8 +21,52 @@ const getAllModalities = async (req, res) => {
   }
 };
 
+const createModality = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({ success: false, error: 'Database not initialized' });
+    }
+
+    const { name, icon } = req.body;
+    if (!name) {
+      return res.status(400).json({ success: false, error: 'Name is required' });
+    }
+
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+    const col = collection(db, 'modalities');
+    const ref = doc(col, slug);
+
+    const snapshot = await getDoc(ref);
+    if (snapshot.exists()) {
+      return res.status(400).json({ success: false, error: 'Modality already exists' });
+    }
+
+    const now = new Date().toISOString();
+    const newModality = {
+      slug,
+      name,
+      label: name,
+      icon: icon || '✨',
+      active: true,
+      created_at: now,
+      updated_at: now,
+      listingsCount: 0,
+      order: 999
+    };
+
+    await setDoc(ref, newModality);
+
+    return res.status(201).json({ success: true, modality: { id: slug, ...newModality } });
+  } catch (error) {
+    console.error('Error creating modality:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getAllModalities,
+  createModality,
   initializeModalitiesIfEmpty: async () => {
     try {
       const db = getDatabase();
