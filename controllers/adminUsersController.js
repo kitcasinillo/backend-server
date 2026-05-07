@@ -166,7 +166,15 @@ const getHealerDetail = async (req, res) => {
     }
 
     const profile = profileSnap.data() || {};
-    const bookingSnap = await getDocs(query(collection(db, BOOKINGS_COLLECTION), where('healerId', '==', id), limit(20)));
+    
+    // Fetch all bookings to calculate real total earned (more accurate than profile fields)
+    const allBookingsSnap = await getDocs(query(collection(db, BOOKINGS_COLLECTION), where('healerId', '==', id)));
+    const totalEarnedFromBookings = allBookingsSnap.docs.reduce((sum, doc) => {
+      const d = doc.data();
+      return sum + toNumber(d.amount || d.totalAmount || d.price || d.paymentAmount, 0);
+    }, 0);
+
+    const bookingSnap = await getDocs(query(collection(db, BOOKINGS_COLLECTION), where('healerId', '==', id), limit(100)));
     const bookings = bookingSnap.docs.map(buildBookingSummary).sort((a, b) => String(b.sessionDate || b.createdAt || '').localeCompare(String(a.sessionDate || a.createdAt || '')));
 
     const result = {
@@ -176,7 +184,7 @@ const getHealerDetail = async (req, res) => {
       email: profile.email || profile.contact_email || '',
       status: userStatusFromProfile(profile),
       subscription: profile.subscription_type === 'premium' || profile.is_premium === true ? 'Premium' : 'Free',
-      totalEarned: toNumber(profile.total_earned || profile.earnings_total || profile.totalEarnings || profile.total_income, 0),
+      totalEarned: totalEarnedFromBookings || toNumber(profile.total_earned || profile.earnings_total || profile.totalEarnings || profile.total_income, 0),
       pendingPayout: toNumber(profile.pending_payout || profile.pendingPayout || profile.pending_balance, 0),
       avatarUrl: profile.profile_picture || profile.avatar_url || profile.photo_url || '',
       location: profile.location || profile.city || profile.address || '',
@@ -187,7 +195,7 @@ const getHealerDetail = async (req, res) => {
       reviewCount: toNumber(profile.review_count || profile.reviews_count || profile.total_reviews, 0),
       languages: Array.isArray(profile.languages) ? profile.languages : [],
       stripeAccountId: profile.stripe_account_id || '',
-      stripeStatus: profile.stripe_connect_status || (profile.stripe_account_id ? 'active' : 'not_connected'),
+      stripeStatus: profile.stripe_connect_status === 'active' ? 'Active' : (profile.stripe_account_id ? 'Connected' : 'Not Connected'),
       rawProfile: profile,
       recentBookings: bookings,
     };
