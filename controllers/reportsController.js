@@ -350,6 +350,309 @@ const getUserReportData = async (req, res) => {
   }
 };
 
+/**
+ * Get retreat report data including trends, revenue, locations, pricing, and performance
+ */
+const getRetreatReportData = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({ success: false, error: 'Database not initialized' });
+    }
+
+    const { startDate, endDate, granularity = 'Monthly', range = 'This Month' } = req.query;
+
+    // Calculate date window as ISO strings
+    let startIso, endIso;
+    const now = new Date();
+
+    if (startDate && endDate) {
+      startIso = new Date(startDate).toISOString();
+      endIso = new Date(endDate).toISOString();
+    } else {
+      endIso = now.toISOString();
+      if (range === 'Today') {
+        const start = new Date(); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Week') {
+        const start = new Date(); start.setDate(now.getDate() - 56); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Month') {
+        startIso = new Date(now.getFullYear() - 1, now.getMonth(), 1).toISOString();
+      } else {
+        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+    }
+
+    console.log(`[RetreatReport] Range: ${range}, Granularity: ${granularity}, Window: ${startIso} -> ${endIso}`);
+
+    // =====================================================
+    // 1. Fetch all retreat listings
+    // =====================================================
+    const retreatSnap = await getDocs(collection(db, 'retreat_listings'));
+    const allRetreats = retreatSnap.docs.map((d) => {
+      const data = d.data();
+      const createdAt = toIsoOrNull(data.createdAt || data.created_at) || null;
+      const sDate = toIsoOrNull(data.startDate || data.start_date) || null;
+      const eDate = toIsoOrNull(data.endDate || data.end_date) || null;
+      const price = Number(data.pricePerPerson || data.price || 0);
+      const capacity = Math.max(0, Number(data.maxParticipants || data.capacity || 0));
+      const bookedSpots = Math.max(0, Number(data.bookedSpots || data.booked_spots || data.participantsBooked || 0));
+      const status = String(data.status || 'draft').toLowerCase();
+
+      // Calculate duration in days
+      let durationDays = 0;
+      if (sDate && eDate) {
+        durationDays = Math.max(1, Math.ceil((new Date(eDate) - new Date(sDate)) / (24 * 60 * 60 * 1000)));
+      }
+
+      return {
+        id: d.id,
+        title: data.title || data.name || 'Untitled Retreat',
+        location: data.location || data.city || data.country || 'Unknown',
+        createdAt,
+        startDate: sDate,
+        endDate: eDate,
+        price,
+        capacity,
+        bookedSpots,
+        status,
+        durationDays,
+        isActive: ['active', 'approved', 'published', 'live'].includes(status),
+      };
+    });
+
+    // Filter retreats within date range (by createdAt)
+    const retreatsInRange = allRetreats.filter(
+      (r) => r.createdAt && r.createdAt >= startIso && r.createdAt <= endIso
+    );
+
+    console.log(`[RetreatReport] Total retreats: ${allRetreats.length}, In range: ${retreatsInRange.length}`);
+
+    // =====================================================
+    // 2. Fetch all bookings for retreat-related data
+    // =====================================================
+    const bookingsSnap = await getDocs(collection(db, 'bookings'));
+    const allBookings = bookingsSnap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        listingId: data.listingId || null,
+        amount: Number(data.amount || data.totalAmount || data.price || 0),
+        createdAt: toIsoOrNull(data.created_at || data.createdAt) || null,
+        format: [data.format, data.modality, data.listingTitle, data.title].filter(Boolean).join(' ').toLowerCase(),
+        status: typeof data.status === 'string' ? data.status : (data.status?.state || 'unknown'),
+      };
+    }).filter((b) => b.format.includes('retreat'));
+
+    // Bookings within range
+    const bookingsInRange = allBookings.filter(
+      (b) => b.createdAt && b.createdAt >= startIso && b.createdAt <= endIso
+    );
+
+    // =====================================================
+    // 3. Active Retreat Count Trend (grouped by granularity)
+    // =====================================================
+    const getDateKey = (isoStr, gran) => {
+      if (gran === 'Weekly') {
+        const d = new Date(isoStr);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        return d.toISOString().split('T')[0];
+      } else if (gran === 'Monthly') {
+        return isoStr.substring(0, 7);
+      }
+      return isoStr.split('T')[0];
+    };
+
+    const retreatCountByPeriod = {};
+    retreatsInRange.forEach((r) => {
+      if (!r.createdAt) return;
+      const key = getDateKey(r.createdAt, granularity);
+      if (!retreatCountByPeriod[key]) retreatCountByPeriod[key] = 0;
+      retreatCountByPeriod[key]++;
+    });
+
+    const retreatCountTrend = Object.entries(retreatCountByPeriod)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, active]) => ({ name, active }));
+
+    // =====================================================
+    // 4. Booking Rate Trend (bookings per period / capacity per period)
+    // =====================================================
+    const periodStats = {};
+    
+    // Aggregate capacity by period
+    retreatsInRange.forEach(r => {
+      if (!r.createdAt) return;
+      const key = getDateKey(r.createdAt, granularity);
+      if (!periodStats[key]) periodStats[key] = { capacity: 0, bookings: 0 };
+      periodStats[key].capacity += (r.capacity || 10);
+    });
+
+    // Aggregate bookings by period
+    bookingsInRange.forEach(b => {
+      if (!b.createdAt) return;
+      const key = getDateKey(b.createdAt, granularity);
+      if (!periodStats[key]) periodStats[key] = { capacity: 0, bookings: 0 };
+      periodStats[key].bookings++;
+    });
+
+    const bookingRateTrend = Object.entries(periodStats)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, stats]) => ({
+        name,
+        rate: stats.capacity > 0 ? Math.min(100, Math.round((stats.bookings / stats.capacity) * 100)) : 0,
+      }));
+
+    // =====================================================
+    // 5. Revenue by Retreat Event (top 5)
+    // =====================================================
+    const revenueMap = {};
+    bookingsInRange.forEach((b) => {
+      if (!b.listingId) return;
+      if (!revenueMap[b.listingId]) revenueMap[b.listingId] = { revenue: 0, bookings: 0 };
+      revenueMap[b.listingId].revenue += b.amount;
+      revenueMap[b.listingId].bookings++;
+    });
+
+    // Map listing IDs to retreat titles
+    const retreatTitleMap = {};
+    allRetreats.forEach((r) => { retreatTitleMap[r.id] = r.title; });
+
+    const revenueByEvent = Object.entries(revenueMap)
+      .map(([id, data]) => ({
+        event: retreatTitleMap[id] || `Retreat ${id.substring(0, 6)}`,
+        revenue: data.revenue,
+      }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5);
+
+    // =====================================================
+    // 6. Top Locations (top 5)
+    // =====================================================
+    const locationCount = {};
+    retreatsInRange.forEach((r) => {
+      const loc = r.location || 'Unknown';
+      locationCount[loc] = (locationCount[loc] || 0) + 1;
+    });
+
+    const topLocations = Object.entries(locationCount)
+      .map(([location, count]) => ({ location, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    // =====================================================
+    // 7. Average Price Trend
+    // =====================================================
+    const priceByPeriod = {};
+    retreatsInRange.forEach((r) => {
+      if (!r.createdAt || !r.price) return;
+      const key = getDateKey(r.createdAt, granularity);
+      if (!priceByPeriod[key]) priceByPeriod[key] = { total: 0, count: 0 };
+      priceByPeriod[key].total += r.price;
+      priceByPeriod[key].count++;
+    });
+
+    const avgPriceTrend = Object.entries(priceByPeriod)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, data]) => ({
+        name,
+        price: Math.round(data.total / data.count),
+      }));
+
+    // =====================================================
+    // 8. Duration Breakdown (Pie chart)
+    // =====================================================
+    let short = 0, medium = 0, long = 0;
+    retreatsInRange.forEach((r) => {
+      if (r.durationDays <= 3) short++;
+      else if (r.durationDays <= 7) medium++;
+      else long++;
+    });
+
+    const durationBreakdown = [
+      { name: '1-3 Days', value: short, color: '#4318FF' },
+      { name: '4-7 Days', value: medium, color: '#01A3B4' },
+      { name: '7+ Days', value: long, color: '#7C3AED' },
+    ];
+
+    // =====================================================
+    // 9. Performance Table (top retreats by revenue)
+    // =====================================================
+    const retreatPerformanceData = Object.entries(revenueMap)
+      .map(([id, data]) => {
+        const retreat = allRetreats.find((r) => r.id === id);
+        const cap = retreat?.capacity || 10;
+        return {
+          event: retreatTitleMap[id] || `Retreat ${id.substring(0, 6)}`,
+          revenue: data.revenue,
+          rate: Math.min(100, Math.round((data.bookings / cap) * 100)),
+          price: retreat?.price || 0,
+        };
+      })
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    // =====================================================
+    // 10. Summary Cards
+    // =====================================================
+    const activeRetreatsCount = retreatsInRange.filter((r) => r.isActive).length;
+    const totalRetreatRevenue = bookingsInRange.reduce((sum, b) => sum + b.amount, 0);
+    const avgPrice = retreatsInRange.length > 0
+      ? Math.round(retreatsInRange.reduce((sum, r) => sum + r.price, 0) / retreatsInRange.length)
+      : 0;
+    const overallBookingRate = totalCapacity > 0
+      ? Math.round((bookingsInRange.length / totalCapacity) * 100)
+      : 0;
+
+    const summary = [
+      {
+        title: 'Active Retreats',
+        value: String(activeRetreatsCount),
+        description: `${retreatsInRange.length} total in period`,
+      },
+      {
+        title: 'Booking Rate',
+        value: `${Math.min(100, overallBookingRate)}%`,
+        description: 'Platform wide capacity',
+      },
+      {
+        title: 'Total Revenue (Retreats)',
+        value: `$${totalRetreatRevenue.toLocaleString()}`,
+        description: 'Current period',
+      },
+      {
+        title: 'Avg. Price',
+        value: `$${avgPrice.toLocaleString()}`,
+        description: 'Per person average',
+      },
+    ];
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        summary,
+        retreatCountTrend,
+        bookingRateTrend,
+        revenueByEvent,
+        topLocations,
+        avgPriceTrend,
+        durationBreakdown,
+        retreatPerformanceData,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching retreat report data:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch retreat report data',
+    });
+  }
+};
+
 module.exports = {
   getUserReportData,
+  getRetreatReportData,
 };
