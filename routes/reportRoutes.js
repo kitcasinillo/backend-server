@@ -1,5 +1,10 @@
 const express = require('express');
-const { getUserReportData, getRetreatReportData, getFinancialReportData } = require('../controllers/reportsController');
+const { 
+  getUserReportData, 
+  getRetreatReportData, 
+  getFinancialReportData,
+  getPlatformOverviewData 
+} = require('../controllers/reportsController');
 
 const router = express.Router();
 
@@ -11,5 +16,8 @@ router.get('/reports/retreats', getRetreatReportData);
 
 // Get financial report data
 router.get('/reports/financial', getFinancialReportData);
+
+// Get platform overview data
+router.get('/reports/overview', getPlatformOverviewData);
 
 module.exports = router;
