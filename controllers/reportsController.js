@@ -598,6 +598,7 @@ const getRetreatReportData = async (req, res) => {
     // =====================================================
     // 10. Summary Cards
     // =====================================================
+    const totalCapacity = retreatsInRange.reduce((sum, r) => sum + (r.capacity || 10), 0);
     const activeRetreatsCount = retreatsInRange.filter((r) => r.isActive).length;
     const totalRetreatRevenue = bookingsInRange.reduce((sum, b) => sum + b.amount, 0);
     const avgPrice = retreatsInRange.length > 0
@@ -652,7 +653,367 @@ const getRetreatReportData = async (req, res) => {
   }
 };
 
+/**
+ * Get financial report data including revenue breakdown, trends, fee impact, rankings, and audit logs
+ */
+const getFinancialReportData = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({ success: false, error: 'Database not initialized' });
+    }
+
+    const { startDate, endDate, granularity = 'Monthly', range = 'This Month' } = req.query;
+
+    // Calculate date window as ISO strings
+    let startIso, endIso;
+    const now = new Date();
+
+    if (startDate && endDate) {
+      startIso = new Date(startDate).toISOString();
+      endIso = new Date(endDate).toISOString();
+    } else {
+      endIso = now.toISOString();
+      if (range === 'Today') {
+        const start = new Date(); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Week') {
+        const start = new Date(); start.setDate(now.getDate() - 56); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Month') {
+        startIso = new Date(now.getFullYear() - 1, now.getMonth(), 1).toISOString();
+      } else {
+        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+    }
+
+    console.log(`[FinancialReport] Range: ${range}, Granularity: ${granularity}, Window: ${startIso} -> ${endIso}`);
+
+    // Helper: get date grouping key
+    const getDateKey = (isoStr, gran) => {
+      if (gran === 'Weekly') {
+        const d = new Date(isoStr);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        return d.toISOString().split('T')[0];
+      } else if (gran === 'Monthly') {
+        return isoStr.substring(0, 7);
+      }
+      return isoStr.split('T')[0];
+    };
+
+    // =====================================================
+    // 1. Fetch all bookings
+    // =====================================================
+    const bookingsSnap = await getDocs(collection(db, 'bookings'));
+    const allBookings = bookingsSnap.docs.map((d) => {
+      const data = d.data();
+      const createdAt = toIsoOrNull(data.created_at || data.createdAt) || null;
+      const amount = Number(data.amount || data.totalAmount || data.price || 0);
+      const isRetreat = (
+        (typeof data.format === 'string' && data.format.toLowerCase().includes('retreat')) ||
+        (typeof data.modality === 'string' && data.modality.toLowerCase().includes('retreat')) ||
+        (typeof data.listingTitle === 'string' && data.listingTitle.toLowerCase().includes('retreat')) ||
+        (typeof data.title === 'string' && data.title.toLowerCase().includes('retreat'))
+      );
+      const status = typeof data.status === 'string' ? data.status : (data.status?.state || 'unknown');
+      const isValid = status !== 'failed' && status !== 'cancelled';
+
+      return {
+        id: d.id,
+        bookingId: 'BK-' + d.id.substring(0, 4).toUpperCase(),
+        createdAt,
+        amount,
+        isRetreat,
+        isValid,
+        healerName: data.healerName || data.healer_name || 'Unknown',
+        healerId: data.healerId || data.healer_id || null,
+        seekerName: data.seekerName || data.seeker_name || 'Unknown',
+        listingTitle: data.listingTitle || data.listing_title || data.title || 'N/A',
+        paymentIntentId: data.paymentIntentId || data.payment_intent_id || 'N/A',
+        paymentStatus: data.paymentStatus || data.payment_status || status,
+      };
+    });
+
+    // Bookings within range (valid payments only)
+    const bookingsInRange = allBookings.filter(
+      (b) => b.createdAt && b.createdAt >= startIso && b.createdAt <= endIso && b.isValid
+    );
+
+    console.log(`[FinancialReport] Total bookings: ${allBookings.length}, In range (valid): ${bookingsInRange.length}`);
+
+    // =====================================================
+    // 2. Fetch premium healers
+    // =====================================================
+    const profilesSnap = await getDocs(collection(db, 'profiles'));
+    const premiumHealers = profilesSnap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          name: data.displayName || data.name || 'Unknown',
+          isPremium: data.subscription_type === 'premium' || !!data.isPremium || !!data.is_premium,
+          activatedAt: toIsoOrNull(data.premium_activated_at || data.premiumActivatedAt) || null,
+          stripeSessionId: data.stripe_session_id || data.stripeSessionId || 'N/A',
+        };
+      })
+      .filter((p) => p.isPremium);
+
+    const PREMIUM_PRICE = 120;
+
+    // Premium activations in range
+    const premiumInRange = premiumHealers.filter(
+      (p) => p.activatedAt && p.activatedAt >= startIso && p.activatedAt <= endIso
+    );
+
+    // =====================================================
+    // 3. Commission Breakdown (using commissionCalculator pattern)
+    // =====================================================
+    const HEALER_COMMISSION_PCT = 0.20;
+    const SEEKER_FEE_PCT = 0.10;
+    const STRIPE_FEE_PCT = 0.029;
+    const STRIPE_FEE_FIXED = 0.30;
+
+    const calcBreakdown = (amount) => {
+      const healerCommission = Math.round(amount * HEALER_COMMISSION_PCT * 100) / 100;
+      const seekerFee = Math.round(amount * SEEKER_FEE_PCT * 100) / 100;
+      const stripeFee = Math.round(((amount + seekerFee) * STRIPE_FEE_PCT + STRIPE_FEE_FIXED) * 100) / 100;
+      const platformRevenue = healerCommission + seekerFee;
+      const netRevenue = platformRevenue - stripeFee;
+      return { healerCommission, seekerFee, stripeFee, platformRevenue, netRevenue, grossAmount: amount + seekerFee };
+    };
+
+    // =====================================================
+    // 4. Revenue by Source (Pie Chart)
+    // =====================================================
+    let sessionRevenue = 0;
+    let retreatRevenue = 0;
+    const subscriptionRevenue = premiumInRange.length * PREMIUM_PRICE;
+
+    bookingsInRange.forEach((b) => {
+      if (b.isRetreat) {
+        retreatRevenue += b.amount;
+      } else {
+        sessionRevenue += b.amount;
+      }
+    });
+
+    const revenueBySource = [
+      { name: 'Sessions', value: Math.round(sessionRevenue), color: '#4318FF' },
+      { name: 'Retreats', value: Math.round(retreatRevenue), color: '#6AD2FF' },
+      { name: 'Subscriptions', value: Math.round(subscriptionRevenue), color: '#8A99AF' },
+    ];
+
+    // =====================================================
+    // 5. Revenue Trend (Area Chart - grouped by granularity)
+    // =====================================================
+    const trendMap = {};
+
+    bookingsInRange.forEach((b) => {
+      if (!b.createdAt) return;
+      const key = getDateKey(b.createdAt, granularity);
+      if (!trendMap[key]) trendMap[key] = { sessions: 0, retreats: 0, subs: 0 };
+      if (b.isRetreat) {
+        trendMap[key].retreats += b.amount;
+      } else {
+        trendMap[key].sessions += b.amount;
+      }
+    });
+
+    // Add subscription revenue to the period it was activated
+    premiumInRange.forEach((p) => {
+      if (!p.activatedAt) return;
+      const key = getDateKey(p.activatedAt, granularity);
+      if (!trendMap[key]) trendMap[key] = { sessions: 0, retreats: 0, subs: 0 };
+      trendMap[key].subs += PREMIUM_PRICE;
+    });
+
+    const revenueTrend = Object.entries(trendMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, data]) => ({
+        month,
+        name: month,
+        sessions: Math.round(data.sessions),
+        retreats: Math.round(data.retreats),
+        subs: Math.round(data.subs),
+      }));
+
+    // =====================================================
+    // 6. Monthly Revenue Comparison (Current vs Prior)
+    // =====================================================
+    const currentTotal = bookingsInRange.reduce((s, b) => s + b.amount, 0) + subscriptionRevenue;
+
+    // Calculate prior period (same duration before startIso)
+    const rangeDurationMs = new Date(endIso).getTime() - new Date(startIso).getTime();
+    const priorStartIso = new Date(new Date(startIso).getTime() - rangeDurationMs).toISOString();
+    const priorEndIso = startIso;
+
+    const priorBookings = allBookings.filter(
+      (b) => b.createdAt && b.createdAt >= priorStartIso && b.createdAt < priorEndIso && b.isValid
+    );
+    const priorPremium = premiumHealers.filter(
+      (p) => p.activatedAt && p.activatedAt >= priorStartIso && p.activatedAt < priorEndIso
+    );
+    const priorTotal = priorBookings.reduce((s, b) => s + b.amount, 0) + (priorPremium.length * PREMIUM_PRICE);
+
+    const monthlyComparison = [
+      { month: 'Current', revenue: Math.round(currentTotal), prior: Math.round(priorTotal) },
+    ];
+
+    // =====================================================
+    // 7. Stripe Fee Impact (Line Chart - grouped by granularity)
+    // =====================================================
+    const feeMap = {};
+
+    bookingsInRange.forEach((b) => {
+      if (!b.createdAt) return;
+      const key = getDateKey(b.createdAt, granularity);
+      const bd = calcBreakdown(b.amount);
+      if (!feeMap[key]) feeMap[key] = { gross: 0, fees: 0 };
+      feeMap[key].gross += bd.grossAmount;
+      feeMap[key].fees += bd.stripeFee;
+    });
+
+    const stripeFeeImpact = Object.entries(feeMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, data]) => ({
+        name,
+        gross: Math.round(data.gross),
+        fees: Math.round(data.fees * 100) / 100,
+      }));
+
+    // =====================================================
+    // 8. Top 10 Healers by Revenue
+    // =====================================================
+    const healerRevenueMap = {};
+    bookingsInRange.forEach((b) => {
+      const key = b.healerName || 'Unknown';
+      if (!healerRevenueMap[key]) healerRevenueMap[key] = 0;
+      healerRevenueMap[key] += b.amount;
+    });
+
+    const topHealers = Object.entries(healerRevenueMap)
+      .map(([name, revenue]) => ({ name, revenue: Math.round(revenue) }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    // =====================================================
+    // 9. Top 10 Retreat Events by Revenue
+    // =====================================================
+    const retreatRevenueMap = {};
+    bookingsInRange.filter((b) => b.isRetreat).forEach((b) => {
+      const key = b.listingTitle || 'Unknown Retreat';
+      if (!retreatRevenueMap[key]) retreatRevenueMap[key] = 0;
+      retreatRevenueMap[key] += b.amount;
+    });
+
+    const topRetreats = Object.entries(retreatRevenueMap)
+      .map(([name, revenue]) => ({ name, revenue: Math.round(revenue) }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+
+    // =====================================================
+    // 10. Booking Audit Ledger (table data)
+    // =====================================================
+    const bookingAudit = bookingsInRange
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .slice(0, 50)
+      .map((b) => {
+        const bd = calcBreakdown(b.amount);
+        return {
+          date: b.createdAt ? b.createdAt.split('T')[0] : 'N/A',
+          bookingId: b.bookingId,
+          listing: b.listingTitle,
+          healer: b.healerName,
+          seeker: b.seekerName,
+          grossAmount: bd.grossAmount,
+          healerCommission: bd.healerCommission,
+          seekerFee: bd.seekerFee,
+          processingFee: bd.stripeFee,
+          netRevenue: bd.netRevenue,
+          stripePi: b.paymentIntentId,
+        };
+      });
+
+    // =====================================================
+    // 11. Premium Activation Log (table data)
+    // =====================================================
+    const premiumLog = premiumInRange.map((p) => ({
+      healer: p.name,
+      activationDate: p.activatedAt ? p.activatedAt.split('T')[0] : 'N/A',
+      amount: PREMIUM_PRICE,
+      stripeSessionId: p.stripeSessionId,
+    }));
+
+    // =====================================================
+    // 12. Summary Cards
+    // =====================================================
+    const totalPlatformRevenue = bookingsInRange.reduce((s, b) => {
+      const bd = calcBreakdown(b.amount);
+      return s + bd.platformRevenue;
+    }, 0) + subscriptionRevenue;
+
+    let growthPctValue = 0;
+    if (priorTotal > 0) {
+      growthPctValue = ((currentTotal - priorTotal) / priorTotal) * 100;
+    } else if (currentTotal > 0) {
+      growthPctValue = 100;
+    }
+    const growthPct = growthPctValue.toFixed(1);
+
+    const avgStripeFee = bookingsInRange.length > 0
+      ? (bookingsInRange.reduce((s, b) => s + calcBreakdown(b.amount).stripeFee, 0) / bookingsInRange.length).toFixed(2)
+      : '0.00';
+
+    const summary = [
+      {
+        title: 'Total Platform Revenue',
+        value: `$${Math.round(totalPlatformRevenue).toLocaleString()}`,
+        description: `${bookingsInRange.length} bookings + ${premiumInRange.length} subscriptions`,
+      },
+      {
+        title: 'Revenue Growth',
+        value: `${growthPct}%`,
+        description: 'vs. prior period',
+      },
+      {
+        title: 'Gross Booking Volume',
+        value: `$${Math.round(currentTotal).toLocaleString()}`,
+        description: 'All sources combined',
+      },
+      {
+        title: 'Avg. Stripe Fee',
+        value: `$${avgStripeFee}`,
+        description: 'Per transaction average',
+      },
+    ];
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        summary,
+        revenueBySource,
+        revenueTrend,
+        monthlyComparison,
+        stripeFeeImpact,
+        topHealers,
+        topRetreats,
+        bookingAudit,
+        premiumLog,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching financial report data:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch financial report data',
+    });
+  }
+};
+
 module.exports = {
   getUserReportData,
   getRetreatReportData,
+  getFinancialReportData,
 };
