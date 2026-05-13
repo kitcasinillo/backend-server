@@ -17,6 +17,7 @@ const toIsoOrNull = (value) => {
   
   // If already a string, validate it's a valid date
   if (typeof value === 'string') {
+    if (!value.trim()) return null;
     const d = new Date(value);
     return isNaN(d.getTime()) ? null : d.toISOString();
   }
@@ -42,6 +43,24 @@ const toIsoOrNull = (value) => {
 };
 
 /**
+ * Standardized date grouping helper
+ */
+const getDateKey = (iso, gran) => {
+  if (!iso) return 'N/A';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'N/A';
+  
+  if (gran === 'Weekly') {
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    d.setDate(diff);
+    return d.toISOString().split('T')[0];
+  }
+  if (gran === 'Monthly') return iso.substring(0, 7);
+  return iso.split('T')[0];
+};
+
+/**
  * Get user report data including registration trends, churn, funnels, and retention
  */
 const getUserReportData = async (req, res) => {
@@ -54,6 +73,9 @@ const getUserReportData = async (req, res) => {
     }
 
     const { startDate, endDate, granularity = 'Daily', range = 'This Month' } = req.query;
+    
+    const now = new Date();
+    let startIso, endIso;
     
     if (startDate && endDate && startDate !== "" && endDate !== "") {
       try {
@@ -230,18 +252,7 @@ const getUserReportData = async (req, res) => {
 
       // Only include bookings in the date range
       if (bookingDate >= startIso && bookingDate <= endIso) {
-        let periodKey = '';
-        if (granularity === 'Weekly') {
-          const d = new Date(bookingDate);
-          const day = d.getDay();
-          const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-          d.setDate(diff);
-          periodKey = d.toISOString().split('T')[0];
-        } else if (granularity === 'Monthly') {
-          periodKey = bookingDate.substring(0, 7);
-        } else {
-          periodKey = bookingDate.split('T')[0];
-        }
+        const periodKey = getDateKey(bookingDate, granularity);
 
         if (!subscriptionsByPeriod[periodKey]) {
           subscriptionsByPeriod[periodKey] = { total: 0, subscribed: 0 };
@@ -471,22 +482,7 @@ const getRetreatReportData = async (req, res) => {
       (b) => b.createdAt && b.createdAt >= startIso && b.createdAt <= endIso
     );
 
-    // =====================================================
     // 3. Active Retreat Count Trend (grouped by granularity)
-    // =====================================================
-    const getDateKey = (isoStr, gran) => {
-      if (gran === 'Weekly') {
-        const d = new Date(isoStr);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-        d.setDate(diff);
-        return d.toISOString().split('T')[0];
-      } else if (gran === 'Monthly') {
-        return isoStr.substring(0, 7);
-      }
-      return isoStr.split('T')[0];
-    };
-
     const retreatCountByPeriod = {};
     retreatsInRange.forEach((r) => {
       if (!r.createdAt) return;
@@ -709,20 +705,6 @@ const getFinancialReportData = async (req, res) => {
     }
 
     console.log(`[FinancialReport] Range: ${range}, Granularity: ${granularity}, Window: ${startIso} -> ${endIso}`);
-
-    // Helper: get date grouping key
-    const getDateKey = (isoStr, gran) => {
-      if (gran === 'Weekly') {
-        const d = new Date(isoStr);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-        d.setDate(diff);
-        return d.toISOString().split('T')[0];
-      } else if (gran === 'Monthly') {
-        return isoStr.substring(0, 7);
-      }
-      return isoStr.split('T')[0];
-    };
 
     // =====================================================
     // 1. Fetch all bookings
@@ -1063,10 +1045,10 @@ const getPlatformOverviewData = async (req, res) => {
         const start = new Date(); start.setHours(0, 0, 0, 0);
         startIso = start.toISOString();
       } else if (range === 'This Week') {
-        const start = new Date(); start.setDate(now.getDate() - 56); start.setHours(0, 0, 0, 0);
+        const start = new Date(); start.setDate(now.getDate() - 7); start.setHours(0, 0, 0, 0);
         startIso = start.toISOString();
       } else if (range === 'This Month') {
-        startIso = new Date(now.getFullYear() - 1, now.getMonth(), 1).toISOString();
+        startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
       } else {
         startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
       }
@@ -1087,14 +1069,15 @@ const getPlatformOverviewData = async (req, res) => {
 
     const allBookings = bookingsSnap.docs.map(d => {
       const data = d.data();
-      const statusStr = typeof data.status === 'string' 
-        ? data.status 
-        : (data.status?.state || data.status?.status || 'unknown');
+      const rawStatus = data.status || 'unknown';
+      const statusStr = typeof rawStatus === 'string' 
+        ? rawStatus 
+        : (rawStatus?.state || rawStatus?.status || String(rawStatus));
         
       return {
         amount: Number(data.amount || 0),
         createdAt: toIsoOrNull(data.created_at || data.createdAt),
-        isRetreat: (data.format || data.listingTitle || '').toLowerCase().includes('retreat'),
+        isRetreat: String(data.format || data.listingTitle || '').toLowerCase().includes('retreat'),
         isValid: !['cancelled', 'failed', 'refunded'].includes(statusStr.toLowerCase())
       };
     });
@@ -1104,20 +1087,6 @@ const getPlatformOverviewData = async (req, res) => {
       const activatedAt = toIsoOrNull(p.activatedAt || p.premium_activated_at);
       return p.isPremium && activatedAt && activatedAt >= startIso && activatedAt <= endIso;
     });
-
-    // Helper for date keys
-    const getDateKey = (iso, gran) => {
-      if (!iso) return 'N/A';
-      if (gran === 'Weekly') {
-        const d = new Date(iso);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-        d.setDate(diff);
-        return d.toISOString().split('T')[0];
-      }
-      if (gran === 'Monthly') return iso.substring(0, 7);
-      return iso.split('T')[0];
-    };
 
     // 2. Aggregate User Growth
     const userGrowthMap = {};
@@ -1224,9 +1193,200 @@ const getPlatformOverviewData = async (req, res) => {
   }
 };
 
+/**
+ * Get dispute report data including trends, severity, outcomes, and repeat offenders
+ */
+const getDisputeReportData = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({ success: false, error: 'Database not initialized' });
+    }
+
+    const { startDate, endDate, granularity = 'Weekly', range = 'This Month' } = req.query;
+
+    // Calculate date window as ISO strings
+    let startIso, endIso;
+    const now = new Date();
+
+    if (startDate && endDate && startDate !== "" && endDate !== "") {
+      try {
+        startIso = new Date(startDate).toISOString();
+        endIso = new Date(endDate).toISOString();
+      } catch (e) {
+        // Fallback to default range if dates are invalid
+        endIso = now.toISOString();
+        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+    } else {
+      endIso = now.toISOString();
+      if (range === 'Today') {
+        const start = new Date(); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Week') {
+        const start = new Date(); start.setDate(now.getDate() - 7); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Month') {
+        startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      } else {
+        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+    }
+
+    // 1. Fetch Data
+    const [disputesSnap, bookingsSnap] = await Promise.all([
+      getDocs(collection(db, 'disputes')),
+      getDocs(collection(db, 'bookings'))
+    ]);
+
+    const allDisputes = disputesSnap.docs.map(d => {
+      const data = d.data();
+      // Check multiple possible date fields
+      const createdAt = toIsoOrNull(data.submittedAt || data.createdAt || data.created_at || data.audit?.createdAt);
+      
+      return {
+        id: d.id,
+        createdAt,
+        type: String(data.type || 'Other'),
+        severity: String(data.severity || 'normal').toLowerCase(),
+        outcome: String(data.outcome || data.decision || 'pending').toLowerCase(),
+        healerId: data.healerId || data.practitionerId,
+        healerName: data.healerName || data.practitionerName || 'Unknown Healer',
+        modality: String(data.modality || data.format || 'Unknown').split(' ').pop() || 'Other'
+      };
+    });
+
+    const allBookings = bookingsSnap.docs.map(d => {
+      const data = d.data();
+      const rawStatus = data.status || 'unknown';
+      const statusStr = typeof rawStatus === 'string'
+        ? rawStatus
+        : (rawStatus?.state || rawStatus?.status || String(rawStatus));
+
+      return {
+        id: d.id,
+        createdAt: toIsoOrNull(data.createdAt || data.created_at),
+        isValid: !['cancelled', 'failed', 'refunded'].includes(statusStr.toLowerCase())
+      };
+    });
+
+    // 2. Filter by range
+    const disputesInRange = allDisputes.filter(d => d.createdAt && d.createdAt >= startIso && d.createdAt <= endIso);
+    const bookingsInRange = allBookings.filter(b => b.createdAt && b.createdAt >= startIso && b.createdAt <= endIso && b.isValid);
+
+    // 3. Dispute Rate Trend
+    const trendMap = {};
+    bookingsInRange.forEach(b => {
+      const key = getDateKey(b.createdAt, granularity);
+      if (!trendMap[key]) trendMap[key] = { bookings: 0, disputes: 0 };
+      trendMap[key].bookings++;
+    });
+    disputesInRange.forEach(d => {
+      const key = getDateKey(d.createdAt, granularity);
+      if (!trendMap[key]) trendMap[key] = { bookings: 0, disputes: 0 };
+      trendMap[key].disputes++;
+    });
+
+    const disputeRateTrend = Object.entries(trendMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, data]) => ({
+        name,
+        rate: data.bookings > 0 ? Number(((data.disputes / data.bookings) * 100).toFixed(1)) : 0
+      }));
+
+    // 4. Disputes by Type
+    const typeMap = {};
+    disputesInRange.forEach(d => {
+      typeMap[d.type] = (typeMap[d.type] || 0) + 1;
+    });
+    const disputesByType = Object.entries(typeMap).map(([name, value]) => ({ name, value }));
+
+    // 5. Disputes by Severity
+    const severityMap = {};
+    disputesInRange.forEach(d => {
+      const key = getDateKey(d.createdAt, granularity);
+      if (!severityMap[key]) severityMap[key] = { normal: 0, safety: 0 };
+      if (d.severity === 'safety') severityMap[key].safety++;
+      else severityMap[key].normal++;
+    });
+    const disputesBySeverity = Object.entries(severityMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, data]) => ({ name, ...data }));
+
+    // 6. Outcome Breakdown
+    const outcomeMap = {};
+    disputesInRange.forEach(d => {
+      const key = getDateKey(d.createdAt, granularity);
+      if (!outcomeMap[key]) outcomeMap[key] = { refund: 0, partial: 0, credit: 0, deny: 0 };
+      if (d.outcome === 'refund') outcomeMap[key].refund++;
+      else if (d.outcome === 'partial') outcomeMap[key].partial++;
+      else if (d.outcome === 'credit') outcomeMap[key].credit++;
+      else if (d.outcome === 'deny' || d.outcome === 'rejected') outcomeMap[key].deny++;
+    });
+    const outcomeBreakdown = Object.entries(outcomeMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, data]) => ({ name, ...data }));
+
+    // 7. Modality Dispute Rate
+    const modalityMap = {};
+    disputesInRange.forEach(d => {
+      modalityMap[d.modality] = (modalityMap[d.modality] || 0) + 1;
+    });
+    const modalityDisputeRate = Object.entries(modalityMap)
+      .map(([name, value]) => ({ name, value: Number(((value / disputesInRange.length) * 100).toFixed(1)) }))
+      .sort((a, b) => b.value - a.value);
+
+    // 8. Healer Repeat Disputes
+    const healerMap = {};
+    allDisputes.forEach(d => {
+      if (!d.healerId) return;
+      if (!healerMap[d.healerId]) healerMap[d.healerId] = { name: d.healerName, count: 0 };
+      healerMap[d.healerId].count++;
+    });
+    const healerRepeatDisputes = Object.entries(healerMap)
+      .map(([id, data]) => ({
+        name: data.name,
+        disputes: data.count,
+        status: data.count >= 2 ? 'flagged' : 'good'
+      }))
+      .sort((a, b) => b.disputes - a.disputes);
+
+    // Summary Metrics
+    const totalDisputes = disputesInRange.length;
+    const safetyDisputes = disputesInRange.filter(d => d.severity === 'safety').length;
+    const resolvedDisputes = disputesInRange.filter(d => d.outcome !== 'pending').length;
+    const avgResolutionHours = 24; // Mock for now
+
+    const summaryData = [
+      { title: "Total Disputes", value: totalDisputes.toString(), description: "Active in period" },
+      { title: "Safety Incidents", value: safetyDisputes.toString(), description: "Requires immediate attention" },
+      { title: "Resolution Rate", value: totalDisputes > 0 ? `${Math.round((resolvedDisputes / totalDisputes) * 100)}%` : "100%", description: "Disputes closed" },
+      { title: "Avg. Resolve Time", value: `${avgResolutionHours}h`, description: "Platform average" }
+    ];
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        summaryData,
+        disputeRateTrend,
+        disputesByType,
+        disputesBySeverity,
+        resolutionTimeTrend: [], // Mock or add later
+        outcomeBreakdown,
+        modalityDisputeRate,
+        healerRepeatDisputes
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching dispute report data:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getUserReportData,
   getRetreatReportData,
   getFinancialReportData,
   getPlatformOverviewData,
+  getDisputeReportData,
 };
