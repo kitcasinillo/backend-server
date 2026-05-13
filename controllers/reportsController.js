@@ -1383,10 +1383,203 @@ const getDisputeReportData = async (req, res) => {
   }
 };
 
+const getBookingReportData = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { startDate, endDate, range = 'This Month', granularity = 'Weekly' } = req.query;
+
+    let startIso, endIso;
+    const now = new Date();
+
+    if (startDate && endDate && startDate !== "" && endDate !== "") {
+      try {
+        startIso = new Date(startDate).toISOString();
+        endIso = new Date(endDate).toISOString();
+      } catch (e) {
+        endIso = now.toISOString();
+        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+    } else {
+      endIso = now.toISOString();
+      if (range === 'Today') {
+        const start = new Date(now); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Week') {
+        const start = new Date(now); start.setDate(now.getDate() - 7); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Month') {
+        const start = new Date(now); start.setDate(now.getDate() - 30); start.setHours(0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else {
+        startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+    }
+
+    // 1. Fetch Data
+    const bookingsSnap = await getDocs(collection(db, 'bookings'));
+    const allBookings = bookingsSnap.docs.map(d => {
+      const data = d.data();
+      return {
+        id: d.id,
+        createdAt: toIsoOrNull(data.createdAt || data.created_at),
+        amount: Number(data.amount) || 0,
+        status: data.paymentStatus || 'unknown', // or actual status
+        seekerId: data.seekerId,
+        healerId: data.healerId,
+        healerName: data.healerName || 'Unknown',
+        modality: String(data.modality || 'Other'),
+        duration: String(data.sessionLength || '60 min'),
+        format: String(data.format || 'Remote')
+      };
+    });
+
+    const bookingsInRange = allBookings.filter(b => b.createdAt && b.createdAt >= startIso && b.createdAt <= endIso);
+    
+    // Previous period for comparison
+    const rangeDuration = new Date(endIso).getTime() - new Date(startIso).getTime();
+    const prevStartIso = new Date(new Date(startIso).getTime() - rangeDuration).toISOString();
+    const prevBookings = allBookings.filter(b => b.createdAt && b.createdAt >= prevStartIso && b.createdAt < startIso);
+
+    // 2. Summary Metrics
+    const totalBookings = bookingsInRange.length;
+    const prevTotalBookings = prevBookings.length;
+    let growthPct = 0;
+    if (prevTotalBookings === 0) {
+      growthPct = totalBookings > 0 ? 100 : 0;
+    } else {
+      growthPct = ((totalBookings - prevTotalBookings) / prevTotalBookings) * 100;
+    }
+
+    const totalValue = bookingsInRange.reduce((sum, b) => sum + b.amount, 0);
+    const avgValue = totalBookings > 0 ? totalValue / totalBookings : 0;
+
+    // Repeat Rate
+    const seekerCounts = {};
+    bookingsInRange.forEach(b => {
+      if (b.seekerId) {
+        seekerCounts[b.seekerId] = (seekerCounts[b.seekerId] || 0) + 1;
+      }
+    });
+    const repeatSeekers = Object.values(seekerCounts).filter(count => count >= 2).length;
+    const totalUniqueSeekers = Object.keys(seekerCounts).length;
+    const repeatRate = totalUniqueSeekers > 0 ? (repeatSeekers / totalUniqueSeekers) * 100 : 0;
+
+    // Completion Rate (Mock logic based on paymentStatus for now)
+    const completedBookings = bookingsInRange.filter(b => ['succeeded', 'completed', 'paid'].includes(b.status.toLowerCase())).length;
+    const completionRatePct = totalBookings > 0 ? (completedBookings / totalBookings) * 100 : 0;
+
+    const summaryData = [
+      { title: "Total Bookings", value: totalBookings.toLocaleString(), description: `${growthPct >= 0 ? '+' : ''}${growthPct.toFixed(1)}% from prior period` },
+      { title: "Avg. Session Value", value: `$${avgValue.toFixed(2)}`, description: "Platform average" },
+      { title: "Repeat Rate", value: `${repeatRate.toFixed(1)}%`, description: "Seekers with 2+ bookings" },
+      { title: "Completion Rate", value: `${completionRatePct.toFixed(1)}%`, description: "Request to successfully finished" },
+    ];
+
+    // 3. Booking Volume & Avg Value Trends
+    const volumeMap = {};
+    const valueMap = {};
+    bookingsInRange.forEach(b => {
+      const key = getDateKey(b.createdAt, granularity);
+      volumeMap[key] = (volumeMap[key] || 0) + 1;
+      if (!valueMap[key]) valueMap[key] = { total: 0, count: 0 };
+      valueMap[key].total += b.amount;
+      valueMap[key].count++;
+    });
+
+    const bookingVolume = Object.keys(volumeMap).sort().map(k => ({
+      name: k,
+      bookings: volumeMap[k]
+    }));
+
+    const avgBookingValue = Object.keys(valueMap).sort().map(k => ({
+      name: k,
+      value: valueMap[k].count > 0 ? Math.round(valueMap[k].total / valueMap[k].count) : 0
+    }));
+
+    // 4. Specialty Metrics
+    const modalityMap = {};
+    const durationMap = {};
+    const formatMap = {};
+    const formatColors = { remote: "#4318FF", "in-person": "#01A3B4" };
+    
+    bookingsInRange.forEach(b => {
+      modalityMap[b.modality] = (modalityMap[b.modality] || 0) + 1;
+      durationMap[b.duration] = (durationMap[b.duration] || 0) + 1;
+      formatMap[b.format] = (formatMap[b.format] || 0) + 1;
+    });
+
+    const modalityPopularity = Object.keys(modalityMap).map(k => ({
+      modality: k,
+      sessions: modalityMap[k]
+    })).sort((a, b) => b.sessions - a.sessions).slice(0, 10);
+
+    const durationDistribution = Object.keys(durationMap).map(k => ({
+      length: k,
+      count: durationMap[k]
+    })).sort((a, b) => b.count - a.count);
+
+    const formatBreakdown = Object.keys(formatMap).map((k, idx) => ({
+      name: k,
+      value: formatMap[k],
+      color: formatColors[k.toLowerCase()] || ["#4318FF", "#01A3B4", "#7C3AED", "#111C44"][idx % 4]
+    }));
+
+    // 5. Completion Rate Funnel (Mock distribution for now based on actual completion rate)
+    const completionRateData = [
+      { status: "Requested", rate: 100 },
+      { status: "Confirmed", rate: Math.min(100, Math.round(completionRatePct + 15)) },
+      { status: "Paid", rate: Math.min(100, Math.round(completionRatePct + 5)) },
+      { status: "Completed", rate: Math.round(completionRatePct) },
+      { status: "Reviewed", rate: Math.round(completionRatePct * 0.8) },
+    ];
+
+    // 6. Top Practitioners
+    const healerMap = {};
+    bookingsInRange.forEach(b => {
+      if (!b.healerId) return;
+      if (!healerMap[b.healerId]) healerMap[b.healerId] = { name: b.healerName, count: 0, revenue: 0, ratingSum: 0, reviewCount: 0 };
+      healerMap[b.healerId].count++;
+      healerMap[b.healerId].revenue += b.amount;
+    });
+
+    const topHealersList = Object.values(healerMap).map(h => ({
+      name: h.name,
+      count: h.count,
+      revenue: h.revenue,
+      rating: h.reviewCount > 0 ? Number((h.ratingSum / h.reviewCount).toFixed(1)) : 5.0 // Mock rating if none
+    }));
+
+    const topHealersByCount = [...topHealersList].sort((a, b) => b.count - a.count).slice(0, 10);
+    const topHealersByRevenue = [...topHealersList].sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+
+    return res.json({
+      success: true,
+      data: {
+        summaryData,
+        bookingVolume,
+        avgBookingValue,
+        modalityPopularity,
+        durationDistribution,
+        formatBreakdown,
+        completionRate: completionRateData,
+        topHealersByCount,
+        topHealersByRevenue
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching booking report data:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   getUserReportData,
   getRetreatReportData,
   getFinancialReportData,
   getPlatformOverviewData,
   getDisputeReportData,
+  getBookingReportData,
 };
+

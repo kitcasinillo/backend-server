@@ -4,7 +4,8 @@ const {
   getRetreatReportData, 
   getFinancialReportData,
   getPlatformOverviewData,
-  getDisputeReportData
+  getDisputeReportData,
+  getBookingReportData
 } = require('../controllers/reportsController');
 
 const router = express.Router();
@@ -23,5 +24,8 @@ router.get('/reports/overview', getPlatformOverviewData);
 
 // Get dispute report data
 router.get('/reports/disputes', getDisputeReportData);
+
+// Get booking report data
+router.get('/reports/bookings', getBookingReportData);
 
 module.exports = router;
