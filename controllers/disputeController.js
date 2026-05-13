@@ -63,10 +63,18 @@ const createDispute = async (req, res) => {
     const currency = body.currency || 'USD';
     const severity = body.severity || (body.type === 'safety' ? 'safety' : 'normal');
 
+    // Resolve names before creating dispute
+    const [seekerName, healerName] = await Promise.all([
+      resolveProfileName(db, body.seekerId),
+      resolveProfileName(db, body.healerId),
+    ]);
+
     const disputeData = {
       bookingId: body.bookingId,
       seekerId: body.seekerId,
       healerId: body.healerId,
+      seekerName: seekerName || null,
+      healerName: healerName || null,
       type: body.type,
       status: 'open',
       severity,
@@ -88,12 +96,6 @@ const createDispute = async (req, res) => {
 
     // Emit webhook event for email notification / workflow
     try {
-      // Resolve names to include in payload
-      const [seekerName, healerName] = await Promise.all([
-        resolveProfileName(db, disputeData.seekerId),
-        resolveProfileName(db, disputeData.healerId),
-      ]);
-
       await sendEvent('dispute.created', {
         id: createdRef.id,
         bookingId: disputeData.bookingId,
