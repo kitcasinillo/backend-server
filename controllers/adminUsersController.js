@@ -31,6 +31,18 @@ const userStatusFromProfile = (data = {}) => {
   return 'Active';
 };
 
+const summarizeBookingStatus = (status) => {
+  if (typeof status === 'string') return status;
+  if (status && typeof status === 'object') {
+    if (status['booking-marked-as-complete-by-healer'] || status['booking-marked-as-complete-by-seeker']) return 'completed';
+    if (status['booking-confirmed-by-healer']) return 'confirmed';
+    if (status['invite-email-to-healer'] || status['invite-email-to-seeker']) return 'pending_confirmation';
+    if (status.state) return String(status.state);
+    return 'created';
+  }
+  return status ? String(status) : 'unknown';
+};
+
 const mapHealerListItem = (profileDoc) => {
   const d = profileDoc.data() || {};
   const subscription = d.subscription_type === 'premium' || d.is_premium === true ? 'Premium' : 'Free';
@@ -71,7 +83,7 @@ const buildBookingSummary = (bookingDoc) => {
     id: bookingDoc.id,
     listingId: d.listingId || null,
     title: d.title || d.listingTitle || d.serviceName || d.sessionType || 'Booking',
-    status: d.status?.state || d.status || 'unknown',
+    status: summarizeBookingStatus(d.status),
     amount: toNumber(d.amount || d.totalAmount || d.price || d.paymentAmount, 0),
     currency: d.currency || 'USD',
     sessionDate: toIsoOrNull(d.sessionDate || d.session_date || d.date),

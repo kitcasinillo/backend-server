@@ -47,7 +47,7 @@ const summarizeBookingStatus = (status) => {
     if (status['invite-email-to-healer'] || status['invite-email-to-seeker']) return 'pending_confirmation';
     return 'created';
   }
-  return 'unknown';
+  return status ? String(status) : 'unknown';
 };
 
 const mapBooking = (bookingDoc, participantMap) => {

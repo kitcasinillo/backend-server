@@ -41,6 +41,18 @@ const mapListingTitle = (data = {}, source = 'session') => {
 
 const mapDescription = (data = {}) => data.description || data.summary || data.about || '';
 
+const summarizeBookingStatus = (status) => {
+  if (typeof status === 'string') return status;
+  if (status && typeof status === 'object') {
+    if (status['booking-marked-as-complete-by-healer'] || status['booking-marked-as-complete-by-seeker']) return 'completed';
+    if (status['booking-confirmed-by-healer']) return 'confirmed';
+    if (status['invite-email-to-healer'] || status['invite-email-to-seeker']) return 'pending_confirmation';
+    if (status.state) return String(status.state);
+    return 'created';
+  }
+  return status ? String(status) : 'unknown';
+};
+
 const buildListingListItem = (docSnap, healerMap, source = 'session') => {
   const d = docSnap.data() || {};
   const healerId = d.healerId || d.hostId || d.userId || d.ownerId || null;
@@ -137,7 +149,7 @@ const loadBookingsForListing = async (db, listingId) => {
       amount: toNumber(d.amount || d.totalAmount || d.price || d.paymentAmount, 0),
       createdAt: toIsoOrNull(d.created_at || d.createdAt),
       sessionDate: toIsoOrNull(d.sessionDate || d.session_date || d.date),
-      status: d.status?.state || d.status || 'unknown',
+      status: summarizeBookingStatus(d.status),
       seekerName: d.seekerName || null,
       healerName: d.healerName || null,
     };
