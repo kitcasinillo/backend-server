@@ -345,6 +345,9 @@ const getUserReportData = async (req, res) => {
     const newHealersInRange = registrationArray.reduce(
       (sum, day) => sum + day.healers, 0
     );
+    const newSeekersInRange = registrationArray.reduce(
+      (sum, day) => sum + day.seekers, 0
+    );
     const conversionRate = healersInRange.length > 0
       ? ((healersInRange.filter((h) => h.bookingsCount > 0).length / healersInRange.length) * 100).toFixed(1)
       : '0.0';
@@ -356,6 +359,11 @@ const getUserReportData = async (req, res) => {
       {
         title: `New Healers (${granularity})`,
         value: `+${newHealersInRange}`,
+        description: `Total for selected ${granularity.toLowerCase()} period`,
+      },
+      {
+        title: `New Seekers (${granularity})`,
+        value: `+${newSeekersInRange}`,
         description: `Total for selected ${granularity.toLowerCase()} period`,
       },
       {

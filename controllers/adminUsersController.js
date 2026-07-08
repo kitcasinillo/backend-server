@@ -105,21 +105,50 @@ const listHealers = async (req, res) => {
     const search = String(req.query.q || '').toLowerCase().trim();
     const requestedStatus = String(req.query.status || '').trim();
     const requestedSubscription = String(req.query.subscription || '').trim();
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
 
-    const results = docs
-      .map(mapHealerListItem)
+    let startIso = null;
+    let endIso = null;
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setUTCHours(0, 0, 0, 0);
+      startIso = start.toISOString();
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setUTCHours(23, 59, 59, 999);
+      endIso = end.toISOString();
+    }
+
+    const allHealers = docs.map(mapHealerListItem);
+
+    const inRange = allHealers.filter(item => {
+      if (!item.joinedDate) return false;
+      const joined = item.joinedDate;
+      return (!startIso || joined >= startIso) && (!endIso || joined <= endIso);
+    });
+    const newSignupsInRange = inRange.length;
+
+    const results = inRange
       .filter((item) => matchesSearch(item, search))
       .filter((item) => !requestedStatus || item.status === requestedStatus)
       .filter((item) => !requestedSubscription || item.subscription === requestedSubscription)
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    const totalCountInRange = results.length;
+
     return res.json({
       success: true,
       results,
+      totalCountInRange,
+      newSignupsInRange,
       filters: {
         q: req.query.q || '',
         status: requestedStatus || '',
         subscription: requestedSubscription || '',
+        startDate: startDate || '',
+        endDate: endDate || '',
       },
     });
   } catch (error) {
@@ -133,19 +162,48 @@ const listSeekers = async (req, res) => {
     const docs = await listProfilesByRole('seeker');
     const search = String(req.query.q || '').toLowerCase().trim();
     const requestedStatus = String(req.query.status || '').trim();
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
 
-    const results = docs
-      .map(mapSeekerListItem)
+    let startIso = null;
+    let endIso = null;
+    if (startDate) {
+      const start = new Date(startDate);
+      start.setUTCHours(0, 0, 0, 0);
+      startIso = start.toISOString();
+    }
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setUTCHours(23, 59, 59, 999);
+      endIso = end.toISOString();
+    }
+
+    const allSeekers = docs.map(mapSeekerListItem);
+
+    const inRange = allSeekers.filter(item => {
+      if (!item.joinedDate) return false;
+      const joined = item.joinedDate;
+      return (!startIso || joined >= startIso) && (!endIso || joined <= endIso);
+    });
+    const newSignupsInRange = inRange.length;
+
+    const results = inRange
       .filter((item) => matchesSearch(item, search))
       .filter((item) => !requestedStatus || item.status === requestedStatus)
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    const totalCountInRange = results.length;
+
     return res.json({
       success: true,
       results,
+      totalCountInRange,
+      newSignupsInRange,
       filters: {
         q: req.query.q || '',
         status: requestedStatus || '',
+        startDate: startDate || '',
+        endDate: endDate || '',
       },
     });
   } catch (error) {

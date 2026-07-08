@@ -218,4 +218,4 @@ app.listen(PORT, () => {
   }
 });
 
-module.exports = app;
+module.exports = app; // Trigger nodemon reload after controller changes
