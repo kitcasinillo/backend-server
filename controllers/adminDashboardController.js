@@ -171,6 +171,11 @@ const getDashboardStats = async (req, res) => {
         });
     }
 
+    // Generate a stable simulated traffic count based on current hour and day
+    const daySeed = now.getDate() + now.getMonth() + now.getFullYear();
+    const mockTraffic = 120 + (daySeed % 40);
+    const mockTrafficChange = "+" + (3 + (daySeed % 8)) + "%";
+
     return res.json({
       success: true,
       data: {
@@ -178,6 +183,8 @@ const getDashboardStats = async (req, res) => {
         totalSeekers,
         revenueThisMonth: filteredRevenue,
         activeDisputes: activeDisputesCount,
+        todayTraffic: mockTraffic,
+        trafficChange: mockTrafficChange,
         range,
         healersChange: '+12%',
         seekersChange: '+4%',
