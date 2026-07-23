@@ -356,10 +356,142 @@ const updateUserSuspension = async (req, res) => {
   }
 };
 
+const listAuthUsers = async (req, res) => {
+  try {
+    // 1. Try fetching via Firebase Admin SDK if service account / admin credentials are present
+    try {
+      const { initAdmin } = require('../config/firebaseAdmin');
+      const adminApp = initAdmin();
+      
+      let allUsers = [];
+      let nextPageToken;
+
+      do {
+        const result = await adminApp.auth().listUsers(1000, nextPageToken);
+        const mapped = result.users.map((u) => {
+          let providers = [];
+          if (Array.isArray(u.providerData) && u.providerData.length > 0) {
+            providers = u.providerData.map(p => p.providerId).filter(Boolean);
+          }
+          if (providers.length === 0 && u.providerId) {
+            providers = [u.providerId];
+          }
+          if (providers.length === 0) {
+            providers = ['password'];
+          }
+
+          // Search for email in providerData if top-level u.email is missing
+          const providerEmail = Array.isArray(u.providerData)
+            ? u.providerData.find((p) => p && p.email)?.email
+            : null;
+          const email = u.email || providerEmail || '';
+
+          return {
+            uid: u.uid,
+            email,
+            phoneNumber: u.phoneNumber || null,
+            displayName: u.displayName || (u.phoneNumber ? `Phone User (${u.phoneNumber})` : null),
+            creationTime: u.metadata?.creationTime || null,
+            lastSignInTime: u.metadata?.lastSignInTime || u.metadata?.creationTime || null,
+            emailVerified: Boolean(u.emailVerified),
+            providers,
+          };
+        });
+        allUsers = allUsers.concat(mapped);
+        nextPageToken = result.pageToken;
+      } while (nextPageToken);
+
+      const sortByCreatedDesc = (arr) => arr.sort((a, b) => {
+        const timeA = a.creationTime ? new Date(a.creationTime).getTime() : 0;
+        const timeB = b.creationTime ? new Date(b.creationTime).getTime() : 0;
+        return timeB - timeA;
+      });
+
+      if (allUsers.length > 0) {
+        return res.json({
+          success: true,
+          data: sortByCreatedDesc(allUsers),
+          totalCount: allUsers.length,
+          source: 'firebase-admin-auth',
+        });
+      }
+    } catch (adminErr) {
+      console.warn('⚠️ Firebase Admin Auth listUsers not available or uncredentialed:', adminErr.message);
+      console.log('🔄 Falling back to Firestore profiles database query for registered users list...');
+    }
+
+    // 2. Fallback: Query registered user profiles directly from Firestore database
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({ success: false, error: 'Database connection not initialized' });
+    }
+
+    const profilesSnap = await getDocs(query(collection(db, PROFILES_COLLECTION), limit(1000)));
+    const firestoreUsers = profilesSnap.docs
+      .map((docSnap) => {
+        const d = docSnap.data() || {};
+        const email = d.email || d.contact_email || d.user_email || d.userEmail || d.account_email || d.mail || '';
+        
+        // Skip profiles without a valid email address
+        if (!email || !email.includes('@')) return null;
+
+        const creationTime = toIsoOrNull(d.created_at || d.createdAt || d.joined_at);
+        const rawLastSignIn = toIsoOrNull(d.last_sign_in || d.last_login || d.lastLogin || d.last_login_at || d.last_active_at || d.updated_at);
+        const lastSignInTime = rawLastSignIn || creationTime;
+
+        const rawProvider = d.provider || d.auth_provider || d.provider_id || d.signInProvider || d.sign_in_provider || d.authProvider;
+        let providers = [];
+        if (Array.isArray(d.providers) && d.providers.length > 0) {
+          providers = d.providers;
+        } else if (Array.isArray(d.providerData) && d.providerData.length > 0) {
+          providers = d.providerData.map(p => typeof p === 'string' ? p : (p.providerId || p.id)).filter(Boolean);
+        } else if (d.google_id || d.googleId || d.is_google) {
+          providers = ['google.com'];
+        } else if (d.apple_id || d.appleId || d.is_apple) {
+          providers = ['apple.com'];
+        } else if (rawProvider) {
+          providers = [rawProvider];
+        } else {
+          providers = ['password'];
+        }
+
+        return {
+          uid: docSnap.id,
+          email,
+          displayName: fullNameFromProfile(d, null),
+          creationTime,
+          lastSignInTime,
+          emailVerified: Boolean(d.email_verified || d.is_verified || d.emailVerified || d.email_verified_at),
+          providers,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const timeA = a.creationTime ? new Date(a.creationTime).getTime() : 0;
+        const timeB = b.creationTime ? new Date(b.creationTime).getTime() : 0;
+        return timeB - timeA;
+      });
+
+    return res.json({
+      success: true,
+      data: firestoreUsers,
+      totalCount: firestoreUsers.length,
+      source: 'firestore-profiles',
+    });
+  } catch (error) {
+    console.error('❌ Error listing auth users:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   listHealers,
   listSeekers,
   getHealerDetail,
   getSeekerDetail,
   updateUserSuspension,
+  listAuthUsers,
 };
