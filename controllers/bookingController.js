@@ -1,6 +1,11 @@
 const { getDatabase } = require('../config/database');
 const { getEmailTransporter } = require('../config/email');
-const { generateHealerEmail, generateSeekerEmail } = require('../utils/emailTemplates');
+const { 
+  generateHealerEmail, 
+  generateHealerText, 
+  generateSeekerEmail, 
+  generateSeekerText 
+} = require('../utils/emailTemplates');
 const { collection, addDoc, query, where, getDocs } = require('firebase/firestore');
 const { sendEvent: sendN8nEvent } = require('../utils/n8n');
 
@@ -170,22 +175,26 @@ const createBooking = async (req, res) => {
           modality: modality || 'Healing'
         };
 
+        const fromAddress = process.env.EMAIL_FROM || (process.env.EMAIL_USER ? `"Ultra Healers" <${process.env.EMAIL_USER}>` : undefined);
+
         // Email to healer
         await emailTransporter.sendMail({
-          from: process.env.EMAIL_USER,
+          from: fromAddress,
           to: healerEmail,
-          subject: '🎉 New Booking Confirmed - Ultra Healers',
-          html: generateHealerEmail(emailData)
+          subject: `🎉 Booking Confirmed: ${emailData.seekerName} booked "${emailData.listingTitle}"`,
+          html: generateHealerEmail(emailData),
+          text: generateHealerText(emailData)
         });
 
         console.log(`✅ Healer email sent to ${healerEmail}`);
 
         // Email to seeker
         await emailTransporter.sendMail({
-          from: process.env.EMAIL_USER,
+          from: fromAddress,
           to: seekerEmail,
-          subject: '✅ Your Booking is Confirmed - Ultra Healers',
-          html: generateSeekerEmail(emailData)
+          subject: `✅ Booking Confirmed with ${emailData.healerName} for "${emailData.listingTitle}"`,
+          html: generateSeekerEmail(emailData),
+          text: generateSeekerText(emailData)
         });
 
         console.log(`✅ Seeker email sent to ${seekerEmail}`);

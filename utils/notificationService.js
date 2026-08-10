@@ -1,5 +1,13 @@
 const { getDatabase, getRealtimeDatabase } = require('../config/database');
 const { getEmailTransporter } = require('../config/email');
+const { 
+  generateWelcomeSeekerEmail, 
+  generateWelcomeSeekerText, 
+  generateWelcomeHealerEmail, 
+  generateWelcomeHealerText,
+  generateAdminSignupNotificationEmail,
+  generateAdminSignupNotificationText
+} = require('./emailTemplates');
 const { ref, get } = require('firebase/database');
 const { collection, query, where, getDocs } = require('firebase/firestore');
 
@@ -141,11 +149,15 @@ class NotificationService {
       const emailContent = this.generateUnreadMessagesEmail(userName, userType, unreadMessages);
       
       // Send email
+      const fromAddress = process.env.EMAIL_USER ? `"Ultra Healers" <${process.env.EMAIL_USER}>` : process.env.EMAIL_FROM;
+      const subjectText = `You have ${unreadMessages.length} conversation${unreadMessages.length > 1 ? 's' : ''} with unread messages - Ultra Healers`;
       await this.emailTransporter.sendMail({
-        from: process.env.EMAIL_USER,
+        from: fromAddress,
+        replyTo: process.env.EMAIL_USER || fromAddress,
         to: userEmail,
-        subject: `You have ${unreadMessages.length} conversation${unreadMessages.length > 1 ? 's' : ''} with unread messages - Ultra Healers`,
-        html: emailContent
+        subject: subjectText,
+        html: emailContent,
+        text: `Hi ${userName},\n\nYou have ${unreadMessages.length} conversation${unreadMessages.length > 1 ? 's' : ''} with unread messages on Ultra Healers. Log in to your dashboard to view and reply to your messages.\n\nUltra Healers Team\nhttps://ultrahealers.com`
       });
 
       console.log(`✅ Sent unread messages notification to ${userType} ${userId} (${userEmail})`);
@@ -286,6 +298,136 @@ class NotificationService {
       };
     } catch (error) {
       console.error('❌ Error in notification process:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Send welcome email to newly registered seeker or healer
+  async sendWelcomeEmail(email, name, role = 'seeker') {
+    try {
+      if (!this.emailTransporter) {
+        console.warn('⚠️ Email transporter not configured, skipping welcome email');
+        return { success: false, error: 'Email service not configured' };
+      }
+
+      if (!email) {
+        console.warn('⚠️ No recipient email provided for welcome email');
+        return { success: false, error: 'Recipient email required' };
+      }
+
+      const isHealer = String(role).toLowerCase() === 'healer';
+
+      // Load custom welcome email settings from database if configured
+      let customTemplate = null;
+      try {
+        if (this.db) {
+          const settingsRef = doc(this.db, 'settings', 'app_config');
+          const settingsSnap = await getDoc(settingsRef);
+          if (settingsSnap.exists()) {
+            customTemplate = settingsSnap.data()?.welcome_emails || null;
+          }
+        }
+      } catch (settingsErr) {
+        console.warn('⚠️ Could not load welcome email settings from DB:', settingsErr.message);
+      }
+
+      const recipientName = name ? `, ${name}` : '';
+      const recipientDisplayName = name || (isHealer ? 'Practitioner' : 'Seeker');
+      const dashboardUrl = isHealer 
+        ? (process.env.HEALER_APP_URL || 'https://ultrahealers.com/healer/dashboard')
+        : (process.env.SEEKER_APP_URL || 'https://ultrahealers.com/dashboard');
+
+      const customSubject = isHealer ? customTemplate?.healer_subject : customTemplate?.seeker_subject;
+      const customBody = isHealer ? customTemplate?.healer_body : customTemplate?.seeker_body;
+
+      const subject = customSubject
+        ? customSubject
+            .replace(/\{\{\s*name\s*\}\}/g, recipientDisplayName)
+            .replace(/\$\{\s*name\s*\}/g, recipientDisplayName)
+            .replace(/\{\{\s*email\s*\}\}/g, email)
+            .replace(/\$\{\s*email\s*\}/g, email)
+        : (isHealer
+            ? `Welcome to Ultra Healers${recipientName} - Getting Started as a Practitioner`
+            : `Welcome to Ultra Healers${recipientName} - Getting Started`);
+
+      const html = isHealer
+        ? generateWelcomeHealerEmail({ name, email, customBody })
+        : generateWelcomeSeekerEmail({ name, email, customBody });
+
+      const text = isHealer
+        ? generateWelcomeHealerText({ name, email, customBody })
+        : generateWelcomeSeekerText({ name, email, customBody });
+
+      const fromAddress = process.env.EMAIL_USER ? `"Ultra Healers" <${process.env.EMAIL_USER}>` : process.env.EMAIL_FROM;
+
+      const info = await this.emailTransporter.sendMail({
+        from: fromAddress,
+        replyTo: process.env.EMAIL_USER || fromAddress,
+        to: email,
+        subject,
+        html,
+        text
+      });
+
+      console.log(`✅ Welcome email sent to ${role} (${email}):`, info.messageId || info.response);
+      return { success: true, emailSent: true, messageId: info.messageId };
+    } catch (error) {
+      console.error(`❌ Error sending welcome email to ${role} (${email}):`, error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Send notification to admin/owner email when a new user registers
+  async sendAdminSignupNotification(userEmail, userName, role = 'seeker', userId = null) {
+    try {
+      if (!this.emailTransporter) {
+        console.warn('⚠️ Email transporter not configured, skipping admin signup notification');
+        return { success: false, error: 'Email service not configured' };
+      }
+
+      // Determine owner / admin notification recipient email
+      const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL || 
+                         process.env.ADMIN_EMAIL || 
+                         process.env.OWNER_EMAIL || 
+                         process.env.NOTIFICATION_EMAIL || 
+                         process.env.EMAIL_USER;
+
+      if (!adminEmail) {
+        console.warn('⚠️ No admin recipient email specified for signup notification');
+        return { success: false, error: 'Admin recipient email required' };
+      }
+
+      const formattedRole = String(role).toUpperCase();
+      const subject = `🔔 New ${formattedRole} Signup: ${userName || userEmail}`;
+
+      const html = generateAdminSignupNotificationEmail({
+        email: userEmail,
+        name: userName,
+        role,
+        userId
+      });
+
+      const text = generateAdminSignupNotificationText({
+        email: userEmail,
+        name: userName,
+        role,
+        userId
+      });
+
+      const fromAddress = process.env.EMAIL_USER ? `"Ultra Healers System" <${process.env.EMAIL_USER}>` : process.env.EMAIL_FROM;
+
+      const info = await this.emailTransporter.sendMail({
+        from: fromAddress,
+        to: adminEmail,
+        subject,
+        html,
+        text
+      });
+
+      console.log(`✅ Admin notification sent for new ${role} signup (${userEmail}) to ${adminEmail}:`, info.messageId || info.response);
+      return { success: true, emailSent: true, messageId: info.messageId, recipient: adminEmail };
+    } catch (error) {
+      console.error(`❌ Error sending admin signup notification for ${userEmail}:`, error);
       return { success: false, error: error.message };
     }
   }

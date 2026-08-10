@@ -242,7 +242,7 @@ const debugBookingMessages = async (req, res) => {
 
 const { sendEvent } = require('../utils/n8n');
 
-// Send event to n8n webhook for notifications (supports both {event,payload} and flat bodies with eventType)
+// Send event to n8n webhook for notifications and send welcome email directly if event is signup
 const sendN8nEvent = async (req, res) => {
   try {
     const event = req.body?.event || req.body?.eventType;
@@ -258,13 +258,98 @@ const sendN8nEvent = async (req, res) => {
       return res.status(400).json({ success: false, error: 'event/eventType and payload are required' });
     }
 
-    const result = await sendEvent(event, payload, { meta: { source: 'backend:notificationController' } });
-    if (!result.sent) {
-      return res.status(500).json({ success: false, error: result.reason || 'Failed to send event' });
+    let welcomeResult = null;
+    let adminNotificationResult = null;
+    const signupEvents = ['signup_seeker', 'signup_healer', 'account.signup', 'user.created'];
+    if (signupEvents.includes(event)) {
+      const email = payload.email;
+      const name = payload.display_name || payload.name || payload.first_name || '';
+      const role = (event === 'signup_healer' || payload.role === 'healer') ? 'healer' : 'seeker';
+      const userId = payload.id || payload.userId || null;
+
+      if (email) {
+        console.log(`📧 Automatically sending welcome email for event ${event} to ${role} (${email})...`);
+        const notificationService = new NotificationService();
+        welcomeResult = await notificationService.sendWelcomeEmail(email, name, role);
+
+        console.log(`🔔 Sending admin notification email for new ${role} signup (${email})...`);
+        adminNotificationResult = await notificationService.sendAdminSignupNotification(email, name, role, userId);
+      }
     }
-    return res.json({ success: true, result });
+
+    let result = null;
+    try {
+      result = await sendEvent(event, payload, { meta: { source: 'backend:notificationController' } });
+    } catch (n8nErr) {
+      console.warn('⚠️ n8n event forward skipped/failed:', n8nErr.message);
+      result = { sent: false, reason: n8nErr.message };
+    }
+
+    return res.json({ success: true, result, welcomeEmail: welcomeResult, adminNotification: adminNotificationResult });
   } catch (error) {
-    console.error('❌ Error sending n8n event:', error);
+    console.error('❌ Error sending n8n event / welcome email:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Manually trigger a test welcome email for seeker or healer
+const testWelcomeEmail = async (req, res) => {
+  try {
+    const { email, name, role } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'email is required' });
+    }
+    const userRole = role || 'seeker';
+    console.log(`🧪 Testing welcome email trigger for ${userRole} (${email})...`);
+    
+    const notificationService = new NotificationService();
+    const result = await notificationService.sendWelcomeEmail(email, name || 'Test User', userRole);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: `Welcome email sent successfully to ${userRole} (${email})`,
+        result
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to send welcome email'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error in testWelcomeEmail endpoint:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Manually trigger a test admin signup notification email
+const testAdminNotification = async (req, res) => {
+  try {
+    const { email, name, role, userId } = req.body;
+    const userEmail = email || 'testuser@example.com';
+    const userName = name || 'Test User';
+    const userRole = role || 'seeker';
+
+    console.log(`🧪 Testing admin signup notification for ${userRole} (${userEmail})...`);
+    
+    const notificationService = new NotificationService();
+    const result = await notificationService.sendAdminSignupNotification(userEmail, userName, userRole, userId || 'test-uid-123');
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: `Admin signup notification sent successfully to ${result.recipient}`,
+        result
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to send admin signup notification'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error in testAdminNotification endpoint:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -276,5 +361,7 @@ module.exports = {
   controlScheduler,
   debugBookingMessages,
   initializeScheduler,
-  sendN8nEvent
+  sendN8nEvent,
+  testWelcomeEmail,
+  testAdminNotification
 };

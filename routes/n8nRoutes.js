@@ -1,5 +1,6 @@
 const express = require('express');
 const { sendEvent, ping } = require('../utils/n8n');
+const NotificationService = require('../utils/notificationService');
 
 const router = express.Router();
 
@@ -31,13 +32,19 @@ router.post('/n8n/account-signup', async (req, res) => {
     if (!userId || !email || !name) {
       return res.status(400).json({ success: false, error: 'userId and email are required' });
     }
+
+    const notificationService = new NotificationService();
+    const userRole = role || 'seeker';
+    const welcomeResult = await notificationService.sendWelcomeEmail(email, name, userRole);
+    const adminNotifResult = await notificationService.sendAdminSignupNotification(email, name, userRole, userId);
+
     const result = await sendEvent('account.signup', {
       userId,
       name,
       email,
-      role,
+      role: userRole,
     }, { meta: { source: 'backend:n8nRoutes' } });
-    res.json({ success: true, result });
+    res.json({ success: true, result, welcomeEmail: welcomeResult, adminNotification: adminNotifResult });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
