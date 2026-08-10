@@ -1,4 +1,16 @@
 // Helper functions for email templates
+function renderTemplate(template, vars = {}) {
+  if (!template) return '';
+  let result = String(template);
+  Object.keys(vars).forEach((key) => {
+    const val = vars[key] !== undefined && vars[key] !== null ? vars[key] : '';
+    const patternBraces = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
+    const patternDollar = new RegExp(`\\$\\{\\s*${key}\\s*\\}`, 'g');
+    result = result.replace(patternBraces, val).replace(patternDollar, val);
+  });
+  return result;
+}
+
 function formatSessionDate(sessionDate) {
   if (!sessionDate) return 'To be scheduled';
   try {
@@ -302,7 +314,13 @@ https://ultrahealers.com`;
 
 function generateWelcomeSeekerText(data) {
   const name = data.name || data.seekerName || 'Seeker';
+  const email = data.email || '';
   const dashboardUrl = process.env.SEEKER_APP_URL || 'https://ultrahealers.com/dashboard';
+
+  if (data.customBody) {
+    return renderTemplate(data.customBody, { name, email, dashboardUrl });
+  }
+
   return `Hi ${name},
 
 Welcome to Ultra Healers! Thank you for joining our community.
@@ -319,7 +337,13 @@ https://ultrahealers.com`;
 
 function generateWelcomeHealerText(data) {
   const name = data.name || data.healerName || 'Practitioner';
+  const email = data.email || '';
   const dashboardUrl = process.env.HEALER_APP_URL || 'https://ultrahealers.com/healer/dashboard';
+
+  if (data.customBody) {
+    return renderTemplate(data.customBody, { name, email, dashboardUrl });
+  }
+
   return `Hi ${name},
 
 Welcome to Ultra Healers! We are glad to have you as a practitioner on our platform.
@@ -417,6 +441,7 @@ Ultra Healers Platform System Notification`;
 }
 
 module.exports = {
+  renderTemplate,
   generateHealerEmail,
   generateHealerText,
   generateSeekerEmail,

@@ -9,7 +9,7 @@ const {
   generateAdminSignupNotificationText
 } = require('./emailTemplates');
 const { ref, get } = require('firebase/database');
-const { collection, query, where, getDocs } = require('firebase/firestore');
+const { collection, query, where, getDocs, doc, getDoc } = require('firebase/firestore');
 
 class NotificationService {
   constructor() {
@@ -321,10 +321,17 @@ class NotificationService {
       let customTemplate = null;
       try {
         if (this.db) {
-          const settingsRef = doc(this.db, 'settings', 'app_config');
-          const settingsSnap = await getDoc(settingsRef);
-          if (settingsSnap.exists()) {
-            customTemplate = settingsSnap.data()?.welcome_emails || null;
+          if (typeof this.db.collection === 'function') {
+            const snap = await this.db.collection('settings').doc('app_config').get();
+            if (snap.exists) {
+              customTemplate = snap.data()?.welcome_emails || null;
+            }
+          } else {
+            const settingsRef = doc(this.db, 'settings', 'app_config');
+            const settingsSnap = await getDoc(settingsRef);
+            if (settingsSnap.exists()) {
+              customTemplate = settingsSnap.data()?.welcome_emails || null;
+            }
           }
         }
       } catch (settingsErr) {
