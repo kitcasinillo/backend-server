@@ -36,6 +36,7 @@ const adminRetreatRoutes = require('./routes/adminRetreatRoutes');
 const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
 const adminFinanceRoutes = require('./routes/adminFinanceRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
 
 // Import commission config for logging
@@ -69,13 +70,17 @@ const { handleWebhook } = require('./controllers/webhookController');
 app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), handleWebhook);
 
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginEmbedderPolicy: false
+}));
 // Disable request logging by default; enable only if explicitly turned on
 const ENABLE_HTTP_LOGS = process.env.ENABLE_HTTP_LOGS === 'true';
 if (ENABLE_HTTP_LOGS) {
   app.use(morgan(process.env.MORGAN_FORMAT || 'combined'));
 }
 app.use(express.json({ limit: '10mb' }));
+app.use(express.text({ limit: '10mb', type: ['text/plain', 'text/plain;charset=UTF-8', 'application/json'] }));
 app.use(express.urlencoded({ extended: true }));
 
 // CORS configuration
@@ -172,6 +177,29 @@ app.use('/api', adminRetreatRoutes);
 app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin/finance', adminFinanceRoutes);
 app.use('/api/admin', reportRoutes);
+const { collectAnalyticsEvent, getAnalyticsStats } = require('./controllers/analyticsController');
+
+// Direct Analytics Collector Endpoints (Top-level matching for all URL path variants)
+app.post('/api/v1/analytics/collect', collectAnalyticsEvent);
+app.post('/api/analytics/collect', collectAnalyticsEvent);
+app.post('/api/collect', collectAnalyticsEvent);
+app.post('/v1/analytics/collect', collectAnalyticsEvent);
+app.post('/analytics/collect', collectAnalyticsEvent);
+app.post('/collect', collectAnalyticsEvent);
+
+// Direct Analytics Stats Endpoints (Top-level matching for all URL path variants)
+app.get('/api/v1/analytics/stats', getAnalyticsStats);
+app.get('/api/admin/analytics/stats', getAnalyticsStats);
+app.get('/api/admin/reports/analytics', getAnalyticsStats);
+app.get('/api/analytics/stats', getAnalyticsStats);
+app.get('/v1/analytics/stats', getAnalyticsStats);
+app.get('/admin/analytics/stats', getAnalyticsStats);
+app.get('/admin/reports/analytics', getAnalyticsStats);
+app.get('/analytics/stats', getAnalyticsStats);
+app.get('/stats', getAnalyticsStats);
+
+app.use('/api', analyticsRoutes);
+app.use('/', analyticsRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {
