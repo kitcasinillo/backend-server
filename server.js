@@ -177,7 +177,7 @@ app.use('/api', adminRetreatRoutes);
 app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin/finance', adminFinanceRoutes);
 app.use('/api/admin', reportRoutes);
-const { collectAnalyticsEvent, getAnalyticsStats } = require('./controllers/analyticsController');
+const { collectAnalyticsEvent, getAnalyticsStats, resetAnalyticsTrackers } = require('./controllers/analyticsController');
 
 // Direct Analytics Collector Endpoints (Top-level matching for all URL path variants)
 app.post('/api/v1/analytics/collect', collectAnalyticsEvent);
@@ -186,6 +186,12 @@ app.post('/api/collect', collectAnalyticsEvent);
 app.post('/v1/analytics/collect', collectAnalyticsEvent);
 app.post('/analytics/collect', collectAnalyticsEvent);
 app.post('/collect', collectAnalyticsEvent);
+
+// Direct Analytics Reset Endpoints
+app.post('/api/v1/analytics/reset', resetAnalyticsTrackers);
+app.post('/api/admin/analytics/reset', resetAnalyticsTrackers);
+app.post('/api/analytics/reset', resetAnalyticsTrackers);
+app.post('/v1/analytics/reset', resetAnalyticsTrackers);
 
 // Direct Analytics Stats Endpoints (Top-level matching for all URL path variants)
 app.get('/api/v1/analytics/stats', getAnalyticsStats);

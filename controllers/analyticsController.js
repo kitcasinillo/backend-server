@@ -1,4 +1,4 @@
-const { collection, addDoc, doc, setDoc, getDoc, getDocs, query, where, orderBy, limit } = require('firebase/firestore');
+const { collection, addDoc, doc, setDoc, getDoc, getDocs, deleteDoc, query, where, orderBy, limit } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 
 const anonymizeIp = (ip) => {
@@ -37,9 +37,52 @@ const parseUserAgent = (uaString = '') => {
   return { device, browser };
 };
 
+const getCanonicalDomainCategory = (domStr) => {
+  if (!domStr) return 'website';
+  const d = domStr.toLowerCase().trim();
+
+  if (d.includes('admin') || d.includes(':5173') || d.includes(':3000')) {
+    return 'admin';
+  }
+  if (d.startsWith('seeker') || d.includes('seekers.') || d.includes('seeker-app') || d.includes(':5174') || d.includes(':3001')) {
+    return 'seekers';
+  }
+  if (d.startsWith('healer') || d.includes('healers.ultrahealers') || d.includes('healer-app') || d.includes(':5175') || d.includes(':3002')) {
+    return 'healers';
+  }
+  return 'website';
+};
+
+const normalizeDomainName = (rawDom) => {
+  const cat = getCanonicalDomainCategory(rawDom);
+  if (cat === 'admin') return 'admin-console.ultrahealers.com';
+  if (cat === 'seekers') return 'seekers.ultrahealers.com';
+  if (cat === 'healers') return 'healers.ultrahealers.com';
+  return 'ultrahealers.com';
+};
+
 const formatClickDescriptor = (raw) => {
   if (!raw) return 'Interactive Element';
-  if (!raw.includes('.')) return raw;
+
+  const legacyMap = {
+    'Action Button': 'Primary Action Button',
+    'Button Click': 'Interactive Control Button',
+    'Icon / Action (Button)': 'Icon Action Button',
+    'Link Click': 'Navigation Link',
+    'Interactive Element': 'Interactive UI Element'
+  };
+
+  if (legacyMap[raw]) {
+    return legacyMap[raw];
+  }
+
+  if (raw.startsWith('"') || raw.startsWith('#')) {
+    return raw;
+  }
+
+  if (!raw.includes('.')) {
+    return raw;
+  }
 
   const match = raw.match(/^([a-z0-9]+)(?:\.[a-z0-9_-]+)*\s*(?:\("([^"]+)"\))?/i);
   if (match) {
@@ -50,10 +93,23 @@ const formatClickDescriptor = (raw) => {
     if (text && !/^\d+$/.test(text)) {
       return `"${text}" (${tagLabel})`;
     }
-    if (raw.includes('rounded-xl') || raw.includes('rounded-full') || raw.includes('p-2')) {
-      return `Icon / Action (${tagLabel})`;
+
+    if (raw.includes('refresh') || raw.includes('spin') || raw.includes('rotate')) {
+      return `"Refresh Data" (${tagLabel})`;
     }
-    return `${tagLabel} Click`;
+    if (raw.includes('export') || raw.includes('download')) {
+      return `"Export File" (${tagLabel})`;
+    }
+    if (raw.includes('filter') || raw.includes('select')) {
+      return `"Filter Control" (${tagLabel})`;
+    }
+    if (raw.includes('search')) {
+      return `"Search Bar" (${tagLabel})`;
+    }
+    if (raw.includes('rounded-xl') || raw.includes('rounded-full') || raw.includes('p-2')) {
+      return `Icon Action (${tagLabel})`;
+    }
+    return `${tagLabel} Action`;
   }
   return raw;
 };
@@ -122,13 +178,14 @@ const collectAnalyticsEvent = async (req, res) => {
             createdAt: timestamp || nowIso,
             updatedAt: nowIso,
             pageviewCount: eventType === 'pageview' ? 1 : 0,
-            durationSeconds: Number(timeOnPage) || 0,
+            durationSeconds: Math.min(Math.max(0, Number(timeOnPage) || 0), 1800),
             isBounce: true
           });
         } else {
           const existing = sessionSnap.data();
           const newPvCount = (existing.pageviewCount || 0) + (eventType === 'pageview' ? 1 : 0);
-          const newDuration = Math.max(existing.durationSeconds || 0, Number(timeOnPage) || 0);
+          const safeTimeOnPage = Math.min(Math.max(0, Number(timeOnPage) || 0), 1800);
+          const newDuration = Math.min(Math.max(existing.durationSeconds || 0, safeTimeOnPage), 1800);
 
           await setDoc(sessionRef, {
             ...existing,
@@ -215,16 +272,42 @@ const getAnalyticsStats = async (req, res) => {
       startDate.setDate(now.getDate() - 30);
     }
 
+    const rawSubdomains = typeof subdomain === 'string'
+      ? subdomain.split(',').map(d => d.trim()).filter(Boolean)
+      : Array.isArray(subdomain) ? subdomain : ['all'];
+
+    const matchesSubdomain = (itemDomain) => {
+      if (rawSubdomains.includes('all') || rawSubdomains.length === 0) return true;
+      if (!itemDomain) return false;
+
+      const itemCategory = getCanonicalDomainCategory(itemDomain);
+
+      return rawSubdomains.some((target) => {
+        const targetCategory = getCanonicalDomainCategory(target);
+        return itemCategory === targetCategory;
+      });
+    };
+
     const startIso = startDate.toISOString();
+    const durationMs = now.getTime() - startDate.getTime();
+    const prevStartDate = new Date(startDate.getTime() - durationMs);
+    const prevStartIso = prevStartDate.toISOString();
+    const prevEndIso = startIso;
 
     let totalSessions = 0;
     let totalBounceSessions = 0;
     let totalDurationSeconds = 0;
+
+    let prevSessions = 0;
+    let prevBounceSessions = 0;
+    let prevDurationSeconds = 0;
+
     const referrerMap = {};
     const subdomainMap = {};
     const utmMap = {};
 
     let totalPageviews = 0;
+    let prevPageviews = 0;
     const pagePathMap = {};
     const pageTimeMap = {};
 
@@ -245,25 +328,31 @@ const getAnalyticsStats = async (req, res) => {
     if (db) {
       // 1. Sessions
       try {
-        const sessionsSnap = await getDocs(query(collection(db, 'analytics_sessions'), limit(1000)));
+        const sessionsSnap = await getDocs(query(collection(db, 'analytics_sessions'), limit(1500)));
         sessionsSnap.docs.forEach((docSnap) => {
           const s = docSnap.data();
-          if (!s.createdAt || s.createdAt < startIso) return;
-          if (subdomain !== 'all' && s.domain !== subdomain && !s.domain?.includes(subdomain)) return;
+          if (!s.createdAt || s.createdAt < prevStartIso) return;
+          if (!matchesSubdomain(s.domain)) return;
 
-          totalSessions += 1;
-          if (s.isBounce) totalBounceSessions += 1;
-          totalDurationSeconds += Number(s.durationSeconds || 0);
+          if (s.createdAt >= startIso) {
+            totalSessions += 1;
+            if (s.isBounce) totalBounceSessions += 1;
+            totalDurationSeconds += Number(s.durationSeconds || 0);
 
-          const ref = s.referrer || 'Direct / None';
-          referrerMap[ref] = (referrerMap[ref] || 0) + 1;
+            const ref = s.referrer || 'Direct / None';
+            referrerMap[ref] = (referrerMap[ref] || 0) + 1;
 
-          const dom = s.domain || 'ultrahealers.com';
-          subdomainMap[dom] = (subdomainMap[dom] || 0) + 1;
+            const dom = normalizeDomainName(s.domain);
+            subdomainMap[dom] = (subdomainMap[dom] || 0) + 1;
 
-          if (s.utmSource) {
-            const utmKey = `${s.utmSource} / ${s.utmMedium || 'none'}`;
-            utmMap[utmKey] = (utmMap[utmKey] || 0) + 1;
+            if (s.utmSource) {
+              const utmKey = `${s.utmSource} / ${s.utmMedium || 'none'}`;
+              utmMap[utmKey] = (utmMap[utmKey] || 0) + 1;
+            }
+          } else if (s.createdAt < prevEndIso) {
+            prevSessions += 1;
+            if (s.isBounce) prevBounceSessions += 1;
+            prevDurationSeconds += Number(s.durationSeconds || 0);
           }
         });
       } catch (err) {
@@ -272,23 +361,30 @@ const getAnalyticsStats = async (req, res) => {
 
       // 2. Pageviews
       try {
-        const pageviewsSnap = await getDocs(query(collection(db, 'analytics_pageviews'), limit(2000)));
+        const pageviewsSnap = await getDocs(query(collection(db, 'analytics_pageviews'), limit(2500)));
         pageviewsSnap.docs.forEach((docSnap) => {
           const p = docSnap.data();
-          if (!p.timestamp || p.timestamp < startIso) return;
-          if (subdomain !== 'all' && p.domain !== subdomain && !p.domain?.includes(subdomain)) return;
+          if (!p.timestamp || p.timestamp < prevStartIso) return;
+          if (!matchesSubdomain(p.domain)) return;
 
-          totalPageviews += 1;
-          const cleanPath = p.path || '/';
-          const fullPath = p.domain && p.domain !== 'localhost' && !p.domain.includes('127.0.0.1')
-            ? `${p.domain}${cleanPath}`
-            : cleanPath;
-          pagePathMap[fullPath] = (pagePathMap[fullPath] || 0) + 1;
+          if (p.timestamp >= startIso) {
+            totalPageviews += 1;
+            const cleanPath = p.path || '/';
+            const dom = p.domain || 'admin-console.ultrahealers.com';
+            const key = `${dom}::${cleanPath}`;
 
-          if (p.timeOnPageSeconds) {
-            if (!pageTimeMap[fullPath]) pageTimeMap[fullPath] = { count: 0, totalSeconds: 0 };
-            pageTimeMap[fullPath].count += 1;
-            pageTimeMap[fullPath].totalSeconds += Number(p.timeOnPageSeconds);
+            if (!pagePathMap[key]) {
+              pagePathMap[key] = { path: cleanPath, domain: dom, views: 0 };
+            }
+            pagePathMap[key].views += 1;
+
+            if (p.timeOnPageSeconds) {
+              if (!pageTimeMap[key]) pageTimeMap[key] = { count: 0, totalSeconds: 0 };
+              pageTimeMap[key].count += 1;
+              pageTimeMap[key].totalSeconds += Number(p.timeOnPageSeconds);
+            }
+          } else if (p.timestamp < prevEndIso) {
+            prevPageviews += 1;
           }
         });
       } catch (err) {
@@ -297,15 +393,21 @@ const getAnalyticsStats = async (req, res) => {
 
       // 3. Events
       try {
-        const eventsSnap = await getDocs(query(collection(db, 'analytics_events'), limit(2000)));
+        const eventsSnap = await getDocs(query(collection(db, 'analytics_events'), limit(2500)));
         eventsSnap.docs.forEach((docSnap) => {
           const e = docSnap.data();
           if (!e.timestamp || e.timestamp < startIso) return;
-          if (subdomain !== 'all' && e.domain !== subdomain && !e.domain?.includes(subdomain)) return;
+          if (!matchesSubdomain(e.domain)) return;
+
+          const dom = e.domain || 'admin-console.ultrahealers.com';
 
           if (e.eventType === 'click' && e.targetElement) {
             const formatted = formatClickDescriptor(e.targetElement);
-            clickMap[formatted] = (clickMap[formatted] || 0) + 1;
+            const clickKey = `${dom}::${formatted}`;
+            if (!clickMap[clickKey]) {
+              clickMap[clickKey] = { element: formatted, domain: dom, count: 0 };
+            }
+            clickMap[clickKey].count += 1;
           }
           if (e.eventType === 'rage_click' && e.targetElement) {
             const formatted = formatClickDescriptor(e.targetElement);
@@ -329,20 +431,19 @@ const getAnalyticsStats = async (req, res) => {
           }
           if (e.eventType === 'exit' && e.path) {
             const cleanExitPath = e.path || '/';
-            const exitKey = e.domain && e.domain !== 'localhost' && !e.domain.includes('127.0.0.1')
-              ? `${e.domain}${cleanExitPath}`
-              : cleanExitPath;
-            exitMap[exitKey] = (exitMap[exitKey] || 0) + 1;
+            const exitKey = `${dom}::${cleanExitPath}`;
+            if (!exitMap[exitKey]) {
+              exitMap[exitKey] = { path: cleanExitPath, domain: dom, count: 0 };
+            }
+            exitMap[exitKey].count += 1;
           }
 
           if (e.timeOnPageSeconds && Number(e.timeOnPageSeconds) > 0 && e.path) {
             const cleanPath = e.path || '/';
-            const fullPath = e.domain && e.domain !== 'localhost' && !e.domain.includes('127.0.0.1')
-              ? `${e.domain}${cleanPath}`
-              : cleanPath;
-            if (!pageTimeMap[fullPath]) pageTimeMap[fullPath] = { count: 0, totalSeconds: 0 };
-            pageTimeMap[fullPath].count += 1;
-            pageTimeMap[fullPath].totalSeconds += Number(e.timeOnPageSeconds);
+            const timeKey = `${dom}::${cleanPath}`;
+            if (!pageTimeMap[timeKey]) pageTimeMap[timeKey] = { count: 0, totalSeconds: 0 };
+            pageTimeMap[timeKey].count += 1;
+            pageTimeMap[timeKey].totalSeconds += Number(e.timeOnPageSeconds);
           }
         });
       } catch (err) {
@@ -393,41 +494,39 @@ const getAnalyticsStats = async (req, res) => {
     const topReferrers = Object.entries(referrerMap)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+      .slice(0, 10);
 
-    const topPages = Object.entries(pagePathMap)
-      .map(([path, views]) => {
-        const timeData = pageTimeMap[path];
+    const topPages = Object.values(pagePathMap)
+      .map((item) => {
+        const timeData = pageTimeMap[`${item.domain}::${item.path}`];
         const avgTimeSeconds = timeData && timeData.count > 0 
           ? Math.round(timeData.totalSeconds / timeData.count) 
           : 0;
-        return { path, views, avgTimeSeconds };
+        return { path: item.path, domain: item.domain, views: item.views, avgTimeSeconds };
       })
       .sort((a, b) => b.views - a.views)
-      .slice(0, 5);
+      .slice(0, 10);
 
-    const topClicks = Object.entries(clickMap)
-      .map(([element, count]) => ({ element, count }))
+    const topClicks = Object.values(clickMap)
       .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+      .slice(0, 10);
 
     const rageClicks = Object.entries(rageClickMap)
       .map(([element, count]) => ({ element, count }))
       .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+      .slice(0, 10);
 
     const topErrors = Object.values(errorMap)
       .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+      .slice(0, 10);
 
     const conversions = Object.entries(conversionMap)
       .map(([goalName, count]) => ({ goalName, count }))
       .sort((a, b) => b.count - a.count);
 
-    const topExits = Object.entries(exitMap)
-      .map(([path, count]) => ({ path, count }))
+    const topExits = Object.values(exitMap)
       .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
+      .slice(0, 10);
 
     const subdomainBreakdown = Object.entries(subdomainMap)
       .map(([name, count]) => ({ name, count }))
@@ -440,7 +539,26 @@ const getAnalyticsStats = async (req, res) => {
       .slice(0, 5);
 
     const avgDuration = totalSessions > 0 ? Math.round(totalDurationSeconds / totalSessions) : 0;
+    const prevAvgDuration = prevSessions > 0 ? Math.round(prevDurationSeconds / prevSessions) : 0;
+
     const bounceRate = totalSessions > 0 ? Math.round((totalBounceSessions / totalSessions) * 100) : 0;
+    const prevBounceRate = prevSessions > 0 ? Math.round((prevBounceSessions / prevSessions) * 100) : 0;
+
+    const formatTrend = (curr, prev, isInverse = false) => {
+      if (prev === 0) {
+        if (curr === 0) return { label: '0.0% vs previous period', trend: 'neutral' };
+        return { label: `+100% vs previous period`, trend: isInverse ? 'down' : 'up' };
+      }
+      const diff = ((curr - prev) / prev) * 100;
+      const sign = diff > 0 ? '+' : '';
+      const trend = diff > 0 ? (isInverse ? 'down' : 'up') : diff < 0 ? (isInverse ? 'up' : 'down') : 'neutral';
+      return { label: `${sign}${diff.toFixed(1)}% vs previous period`, trend };
+    };
+
+    const pageviewsTrend = formatTrend(totalPageviews, prevPageviews);
+    const sessionsTrend = formatTrend(totalSessions, prevSessions);
+    const durationTrend = formatTrend(avgDuration, prevAvgDuration);
+    const bounceRateTrend = formatTrend(bounceRate, prevBounceRate, true);
 
     const webVitals = {
       avgLcpMs: vitalsSampleCount > 0 ? Math.round(totalLcpMs / vitalsSampleCount) : 0,
@@ -457,6 +575,16 @@ const getAnalyticsStats = async (req, res) => {
           totalSessions,
           avgDurationSeconds: avgDuration,
           bounceRatePercent: bounceRate,
+          trends: {
+            pageviewsLabel: pageviewsTrend.label,
+            pageviewsTrend: pageviewsTrend.trend,
+            sessionsLabel: sessionsTrend.label,
+            sessionsTrend: sessionsTrend.trend,
+            durationLabel: durationTrend.label,
+            durationTrend: durationTrend.trend,
+            bounceRateLabel: bounceRateTrend.label,
+            bounceRateTrend: bounceRateTrend.trend
+          }
         },
         webVitals,
         topErrors,
@@ -493,7 +621,72 @@ const getAnalyticsStats = async (req, res) => {
   }
 };
 
+const resetAnalyticsTrackers = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(200).json({ success: false, error: 'Database uninitialized' });
+    }
+
+    const { target = 'all' } = req.body || {};
+    let deletedCount = 0;
+
+    const collectionsToDelete = [];
+
+    if (target === 'all' || target === 'sessions') {
+      collectionsToDelete.push({ colName: 'analytics_sessions' });
+    }
+    if (target === 'all' || target === 'pageviews') {
+      collectionsToDelete.push({ colName: 'analytics_pageviews' });
+    }
+    if (target === 'all' || target === 'events') {
+      collectionsToDelete.push({ colName: 'analytics_events' });
+    } else if (['clicks', 'exits', 'conversions', 'vitals', 'errors', 'rage_clicks'].includes(target)) {
+      const typeMap = {
+        clicks: 'click',
+        exits: 'exit',
+        conversions: 'conversion',
+        vitals: 'web_vitals',
+        errors: 'error',
+        rage_clicks: 'rage_click'
+      };
+      collectionsToDelete.push({ colName: 'analytics_events', eventType: typeMap[target] });
+    }
+
+    for (const item of collectionsToDelete) {
+      try {
+        let q;
+        if (item.eventType) {
+          q = query(collection(db, item.colName), where('eventType', '==', item.eventType), limit(500));
+        } else {
+          q = query(collection(db, item.colName), limit(500));
+        }
+
+        const snap = await getDocs(q);
+        const deletePromises = snap.docs.map((docSnap) => deleteDoc(docSnap.ref));
+        await Promise.all(deletePromises);
+        deletedCount += snap.docs.length;
+      } catch (err) {
+        console.warn(`Analytics delete warning for ${item.colName}:`, err.message);
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      target,
+      deletedCount,
+      message: target === 'all' 
+        ? 'All analytics tracker counts cleared successfully' 
+        : `Tracker counts for '${target}' cleared successfully`
+    });
+  } catch (error) {
+    console.error('Error resetting analytics trackers:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   collectAnalyticsEvent,
-  getAnalyticsStats
+  getAnalyticsStats,
+  resetAnalyticsTrackers
 };

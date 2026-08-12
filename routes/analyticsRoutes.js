@@ -1,5 +1,5 @@
 const express = require('express');
-const { collectAnalyticsEvent, getAnalyticsStats } = require('../controllers/analyticsController');
+const { collectAnalyticsEvent, getAnalyticsStats, resetAnalyticsTrackers } = require('../controllers/analyticsController');
 
 const router = express.Router();
 
@@ -7,6 +7,12 @@ const router = express.Router();
 router.post('/v1/analytics/collect', collectAnalyticsEvent);
 router.post('/analytics/collect', collectAnalyticsEvent);
 router.post('/collect', collectAnalyticsEvent);
+
+// Reset Trackers Endpoints
+router.post('/v1/analytics/reset', resetAnalyticsTrackers);
+router.post('/admin/analytics/reset', resetAnalyticsTrackers);
+router.post('/analytics/reset', resetAnalyticsTrackers);
+router.post('/reset', resetAnalyticsTrackers);
 
 // Admin Stats API endpoints
 router.get('/v1/analytics/stats', getAnalyticsStats);
