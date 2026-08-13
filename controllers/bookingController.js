@@ -108,6 +108,7 @@ const createBooking = async (req, res) => {
 
     // Create booking data with new status structure
     const bookingData = {
+      bookingType: req.body.bookingType || 'session',
       listingId,
       healerId,
       seekerId,

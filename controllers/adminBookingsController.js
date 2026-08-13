@@ -35,6 +35,9 @@ const buildParticipantMap = async (db) => {
 };
 
 const inferBookingType = (data = {}) => {
+  if (data.bookingType) return String(data.bookingType).toLowerCase() === 'retreat' ? 'retreat' : 'session';
+  if (data.type) return String(data.type).toLowerCase() === 'retreat' ? 'retreat' : 'session';
+  if (data.retreatListingId) return 'retreat';
   const joined = [data.format, data.modality, data.listingTitle, data.title].filter(Boolean).join(' ').toLowerCase();
   return joined.includes('retreat') ? 'retreat' : 'session';
 };

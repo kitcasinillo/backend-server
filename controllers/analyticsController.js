@@ -61,6 +61,37 @@ const normalizeDomainName = (rawDom) => {
   return 'ultrahealers.com';
 };
 
+const isDateTimeClickDescriptor = (targetStr) => {
+  if (!targetStr) return false;
+  const str = String(targetStr).toLowerCase();
+
+  if (
+    str.includes('select_date') ||
+    str.includes('pick_a_date') ||
+    str.includes('pick_date') ||
+    str.includes('time_slot') ||
+    str.includes('available_time_slots') ||
+    str.includes('morning_am') ||
+    str.includes('afternoon_evening_pm') ||
+    str.includes('schedule_your_session') ||
+    str.match(/_\d{1,2}_\d{2}_(am|pm)?/i) ||
+    str.match(/_\d{1,2}00_(am|pm)/i)
+  ) {
+    return true;
+  }
+  return false;
+};
+
+const stripUidFromDescriptor = (rawStr) => {
+  if (!rawStr) return '';
+  const reservedPrefixes = /^(healers|seekers|retreats|listings|bookings|users|nav|modal|reports|disputes|finance|campaigns|modalities|settings|home)$/i;
+  return String(rawStr)
+    .split('_')
+    .filter(Boolean)
+    .filter(part => !(/^[A-Za-z0-9_-]{20,36}$/.test(part) && !reservedPrefixes.test(part)))
+    .join('_');
+};
+
 const formatClickDescriptor = (raw) => {
   if (!raw) return 'Interactive Element';
 
@@ -402,16 +433,22 @@ const getAnalyticsStats = async (req, res) => {
           const dom = e.domain || 'admin-console.ultrahealers.com';
 
           if (e.eventType === 'click' && e.targetElement) {
-            const formatted = formatClickDescriptor(e.targetElement);
-            const clickKey = `${dom}::${formatted}`;
-            if (!clickMap[clickKey]) {
-              clickMap[clickKey] = { element: formatted, domain: dom, count: 0 };
+            if (!isDateTimeClickDescriptor(e.targetElement)) {
+              const cleanElem = stripUidFromDescriptor(e.targetElement);
+              const formatted = formatClickDescriptor(cleanElem);
+              const clickKey = `${dom}::${formatted}`;
+              if (!clickMap[clickKey]) {
+                clickMap[clickKey] = { element: formatted, domain: dom, count: 0 };
+              }
+              clickMap[clickKey].count += 1;
             }
-            clickMap[clickKey].count += 1;
           }
           if (e.eventType === 'rage_click' && e.targetElement) {
-            const formatted = formatClickDescriptor(e.targetElement);
-            rageClickMap[formatted] = (rageClickMap[formatted] || 0) + 1;
+            if (!isDateTimeClickDescriptor(e.targetElement)) {
+              const cleanElem = stripUidFromDescriptor(e.targetElement);
+              const formatted = formatClickDescriptor(cleanElem);
+              rageClickMap[formatted] = (rageClickMap[formatted] || 0) + 1;
+            }
           }
           if (e.eventType === 'error' && e.errorMessage) {
             const errKey = `${e.errorMessage} (${e.source || 'Script'})`;
@@ -454,32 +491,53 @@ const getAnalyticsStats = async (req, res) => {
       try {
         const profilesSnap = await getDocs(collection(db, 'profiles'));
         profilesSnap.docs.forEach((docSnap) => {
-          const p = docSnap.data();
-          const rawDate = p.created_at || p.createdAt || p.joined_at;
-          if (!rawDate) return;
+          const p = docSnap.data() || {};
+          const rawRoles = Array.isArray(p.roles)
+            ? p.roles
+            : [p.role, p.type].filter(Boolean);
+          const roles = Array.from(new Set(rawRoles.map((r) => String(r).toLowerCase())));
 
-          let dateObj = null;
-          if (typeof rawDate === 'string') dateObj = new Date(rawDate);
-          else if (typeof rawDate.toDate === 'function') dateObj = rawDate.toDate();
-          else if (rawDate.seconds) dateObj = new Date(rawDate.seconds * 1000);
+          const createdAt = p.created_at || p.createdAt || p.joined_at;
 
-          if (!dateObj || isNaN(dateObj.getTime())) return;
+          const parseDate = (rawDate) => {
+            if (!rawDate) return null;
+            if (typeof rawDate === 'string') {
+              const d = new Date(rawDate);
+              return !isNaN(d.getTime()) ? d : null;
+            }
+            if (typeof rawDate.toDate === 'function') return rawDate.toDate();
+            if (rawDate.seconds) return new Date(rawDate.seconds * 1000);
+            return null;
+          };
 
-          const year = dateObj.getFullYear();
-          const monthStr = String(dateObj.getMonth() + 1).padStart(2, '0');
-          const key = `${year}-${monthStr}`;
+          const seekerDate = parseDate(p.seeker_joined_at || p.seeker_created_at) || (roles.includes('seeker') ? parseDate(createdAt) : null);
+          const healerDate = parseDate(p.healer_joined_at || p.healer_created_at) || (roles.includes('healer') ? (p.role === 'seeker' ? parseDate(p.updated_at || p.last_activity_at || createdAt) : parseDate(createdAt)) : null);
 
-          if (!monthlyAcquisition[key]) {
-            const monthLabel = dateObj.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-            monthlyAcquisition[key] = { monthKey: key, label: monthLabel, healers: 0, seekers: 0, total: 0 };
+          // 1. Process Seeker Acquisition Point
+          if ((roles.includes('seeker') || p.role === 'seeker') && seekerDate) {
+            const year = seekerDate.getFullYear();
+            const monthStr = String(seekerDate.getMonth() + 1).padStart(2, '0');
+            const key = `${year}-${monthStr}`;
+
+            if (!monthlyAcquisition[key]) {
+              const monthLabel = seekerDate.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+              monthlyAcquisition[key] = { monthKey: key, label: monthLabel, healers: 0, seekers: 0, total: 0 };
+            }
+            monthlyAcquisition[key].seekers += 1;
+            monthlyAcquisition[key].total += 1;
           }
 
-          const role = String(p.role || '').toLowerCase();
-          if (role === 'healer') {
+          // 2. Process Healer Acquisition Point
+          if ((roles.includes('healer') || p.role === 'healer') && healerDate) {
+            const year = healerDate.getFullYear();
+            const monthStr = String(healerDate.getMonth() + 1).padStart(2, '0');
+            const key = `${year}-${monthStr}`;
+
+            if (!monthlyAcquisition[key]) {
+              const monthLabel = healerDate.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+              monthlyAcquisition[key] = { monthKey: key, label: monthLabel, healers: 0, seekers: 0, total: 0 };
+            }
             monthlyAcquisition[key].healers += 1;
-            monthlyAcquisition[key].total += 1;
-          } else if (role === 'seeker') {
-            monthlyAcquisition[key].seekers += 1;
             monthlyAcquisition[key].total += 1;
           }
         });
