@@ -82,6 +82,46 @@ const isDateTimeClickDescriptor = (targetStr) => {
   return false;
 };
 
+const isFilterOrDropdownDescriptor = (targetStr) => {
+  if (!targetStr) return false;
+  const str = String(targetStr).toLowerCase();
+
+  if (isDateTimeClickDescriptor(targetStr)) return true;
+
+  if (
+    str.includes('filter') ||
+    str.includes('dropdown') ||
+    str.includes('select') ||
+    str.includes('option') ||
+    str.includes('time_horizon') ||
+    str.includes('subdomain') ||
+    str.includes('custom_range') ||
+    str.includes('apply_custom_range') ||
+    str.includes('reset_preset') ||
+    str.includes('group_by') ||
+    str.includes('calendar') ||
+    str.includes('date_picker') ||
+    str.includes('from_date') ||
+    str.includes('to_date') ||
+    str.includes('all subdomains') ||
+    str.includes('select all') ||
+    str.includes('last 7 days') ||
+    str.includes('last 30 days') ||
+    str.includes('last 90 days') ||
+    str.includes('year to date') ||
+    str.includes('all time') ||
+    str.startsWith('select') ||
+    str.startsWith('option') ||
+    str.includes('type-date') ||
+    str.includes('popover') ||
+    str.includes('combobox') ||
+    str.includes('chevron')
+  ) {
+    return true;
+  }
+  return false;
+};
+
 const stripUidFromDescriptor = (rawStr) => {
   if (!rawStr) return '';
   const reservedPrefixes = /^(healers|seekers|retreats|listings|bookings|users|nav|modal|reports|disputes|finance|campaigns|modalities|settings|home)$/i;
@@ -250,6 +290,11 @@ const collectAnalyticsEvent = async (req, res) => {
           eventType === 'web_vitals' ||
           eventType === 'conversion'
         ) {
+          const targetElem = targetElement || evt.targetElement || null;
+          if ((eventType === 'click' || eventType === 'rage_click') && isFilterOrDropdownDescriptor(targetElem)) {
+            continue;
+          }
+
           await addDoc(collection(db, 'analytics_events'), {
             sessionId,
             domain,
@@ -284,12 +329,42 @@ const collectAnalyticsEvent = async (req, res) => {
 const getAnalyticsStats = async (req, res) => {
   try {
     const db = getDatabase();
-    const { range = '30d', subdomain = 'all' } = req.query;
+    const { range = '30d', subdomain = 'all', startDate: customStartDate, endDate: customEndDate, granularity: requestedGranularity } = req.query;
+
+    const parseIsoString = (rawDate) => {
+      if (!rawDate) return null;
+      if (typeof rawDate === 'string') {
+        const d = new Date(rawDate);
+        return !isNaN(d.getTime()) ? d.toISOString() : null;
+      }
+      if (typeof rawDate.toDate === 'function') {
+        return rawDate.toDate().toISOString();
+      }
+      if (rawDate.seconds) {
+        return new Date(rawDate.seconds * 1000).toISOString();
+      }
+      if (rawDate instanceof Date && !isNaN(rawDate.getTime())) {
+        return rawDate.toISOString();
+      }
+      return null;
+    };
 
     const now = new Date();
     let startDate = new Date(now);
+    let endDate = new Date(now);
 
-    if (range === '7d') {
+    if (customStartDate && customEndDate) {
+      try {
+        startDate = new Date(customStartDate);
+        endDate = new Date(customEndDate);
+        if (typeof customEndDate === 'string' && customEndDate.length === 10) {
+          endDate.setHours(23, 59, 59, 999);
+        }
+      } catch (e) {
+        startDate = new Date(now);
+        startDate.setDate(now.getDate() - 30);
+      }
+    } else if (range === '7d') {
       startDate.setDate(now.getDate() - 7);
     } else if (range === '30d') {
       startDate.setDate(now.getDate() - 30);
@@ -298,7 +373,41 @@ const getAnalyticsStats = async (req, res) => {
     } else if (range === 'ytd') {
       startDate = new Date(now.getFullYear(), 0, 1);
     } else if (range === 'all') {
-      startDate = new Date(2020, 0, 1);
+      let earliestTime = null;
+      if (db) {
+        try {
+          const profilesSnap = await getDocs(collection(db, 'profiles'));
+          profilesSnap.docs.forEach((docSnap) => {
+            const p = docSnap.data() || {};
+            const dStr = p.seeker_joined_at || p.healer_joined_at || p.created_at || p.createdAt || p.joined_at;
+            const parsed = parseIsoString(dStr);
+            if (parsed) {
+              const t = new Date(parsed).getTime();
+              if (!earliestTime || t < earliestTime) earliestTime = t;
+            }
+          });
+
+          const sessionsSnap = await getDocs(query(collection(db, 'analytics_sessions'), limit(500)));
+          sessionsSnap.docs.forEach((docSnap) => {
+            const s = docSnap.data() || {};
+            const parsed = parseIsoString(s.createdAt || s.created_at || s.timestamp);
+            if (parsed) {
+              const t = new Date(parsed).getTime();
+              if (!earliestTime || t < earliestTime) earliestTime = t;
+            }
+          });
+        } catch (err) {
+          console.warn('Earliest date query warning:', err.message);
+        }
+      }
+
+      if (earliestTime) {
+        startDate = new Date(earliestTime);
+        startDate.setDate(1);
+        startDate.setHours(0, 0, 0, 0);
+      } else {
+        startDate = new Date(now.getFullYear(), 0, 1);
+      }
     } else {
       startDate.setDate(now.getDate() - 30);
     }
@@ -320,7 +429,8 @@ const getAnalyticsStats = async (req, res) => {
     };
 
     const startIso = startDate.toISOString();
-    const durationMs = now.getTime() - startDate.getTime();
+    const endIso = endDate.toISOString();
+    const durationMs = Math.max(endDate.getTime() - startDate.getTime(), 86400000);
     const prevStartDate = new Date(startDate.getTime() - durationMs);
     const prevStartIso = prevStartDate.toISOString();
     const prevEndIso = startIso;
@@ -356,16 +466,106 @@ const getAnalyticsStats = async (req, res) => {
 
     const monthlyAcquisition = {};
 
+    // Determine adaptive granularity for User Acquisition Trends based on date filter range or explicit request
+    let acquisitionGranularity = 'month';
+    if (['day', 'week', 'month'].includes(requestedGranularity)) {
+      acquisitionGranularity = requestedGranularity;
+    } else {
+      const totalDaysDiff = Math.ceil(Math.abs(endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+      if (range === '7d' || totalDaysDiff <= 14) {
+        acquisitionGranularity = 'day';
+      } else if (range === '30d' || range === '90d' || (totalDaysDiff > 14 && totalDaysDiff <= 120)) {
+        acquisitionGranularity = 'week';
+      } else {
+        acquisitionGranularity = 'month';
+      }
+    }
+
+    const getAcquisitionBucketInfo = (dateObj, mode) => {
+      if (!dateObj) return { bucketKey: 'unknown', label: 'Unknown' };
+
+      if (mode === 'day') {
+        const year = dateObj.getFullYear();
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        const bucketKey = `${year}-${month}-${day}`;
+        const label = dateObj.toLocaleString('en-US', { month: 'short', day: 'numeric' });
+        return { bucketKey, label };
+      }
+
+      if (mode === 'week') {
+        const d = new Date(dateObj);
+        const dayOfWeek = d.getDay();
+        const diffToMonday = d.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+        const startOfWeek = new Date(d.setDate(diffToMonday));
+        const year = startOfWeek.getFullYear();
+        const month = String(startOfWeek.getMonth() + 1).padStart(2, '0');
+        const day = String(startOfWeek.getDate()).padStart(2, '0');
+        const bucketKey = `${year}-${month}-${day}`;
+        const label = `Week of ${startOfWeek.toLocaleString('en-US', { month: 'short', day: 'numeric' })}`;
+        return { bucketKey, label };
+      }
+
+      // mode === 'month'
+      const year = dateObj.getFullYear();
+      const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const bucketKey = `${year}-${month}`;
+      const label = dateObj.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+      return { bucketKey, label };
+    };
+
+    // Pre-populate zero-count timeline buckets for continuous chart visualization
+    if (acquisitionGranularity === 'day') {
+      const curr = new Date(startDate);
+      while (curr <= endDate) {
+        const { bucketKey, label } = getAcquisitionBucketInfo(curr, 'day');
+        if (!monthlyAcquisition[bucketKey]) {
+          monthlyAcquisition[bucketKey] = { monthKey: bucketKey, label, healers: 0, seekers: 0, total: 0 };
+        }
+        curr.setDate(curr.getDate() + 1);
+      }
+    } else if (acquisitionGranularity === 'week') {
+      const curr = new Date(startDate);
+      while (curr <= endDate) {
+        const { bucketKey, label } = getAcquisitionBucketInfo(curr, 'week');
+        if (!monthlyAcquisition[bucketKey]) {
+          monthlyAcquisition[bucketKey] = { monthKey: bucketKey, label, healers: 0, seekers: 0, total: 0 };
+        }
+        curr.setDate(curr.getDate() + 7);
+      }
+    } else if (acquisitionGranularity === 'month') {
+      const startYear = startDate.getFullYear();
+      const startMonth = startDate.getMonth();
+      const endYear = endDate.getFullYear();
+      const endMonth = endDate.getMonth();
+      
+      let y = startYear;
+      let m = startMonth;
+      while (y < endYear || (y === endYear && m <= endMonth)) {
+        const tempDate = new Date(y, m, 1);
+        const { bucketKey, label } = getAcquisitionBucketInfo(tempDate, 'month');
+        if (!monthlyAcquisition[bucketKey]) {
+          monthlyAcquisition[bucketKey] = { monthKey: bucketKey, label, healers: 0, seekers: 0, total: 0 };
+        }
+        m++;
+        if (m > 11) {
+          m = 0;
+          y++;
+        }
+      }
+    }
+
     if (db) {
       // 1. Sessions
       try {
         const sessionsSnap = await getDocs(query(collection(db, 'analytics_sessions'), limit(1500)));
         sessionsSnap.docs.forEach((docSnap) => {
-          const s = docSnap.data();
-          if (!s.createdAt || s.createdAt < prevStartIso) return;
+          const s = docSnap.data() || {};
+          const createdIso = parseIsoString(s.createdAt || s.created_at || s.timestamp);
+          if (!createdIso || createdIso < prevStartIso) return;
           if (!matchesSubdomain(s.domain)) return;
 
-          if (s.createdAt >= startIso) {
+          if (createdIso >= startIso && createdIso <= endIso) {
             totalSessions += 1;
             if (s.isBounce) totalBounceSessions += 1;
             totalDurationSeconds += Number(s.durationSeconds || 0);
@@ -380,7 +580,7 @@ const getAnalyticsStats = async (req, res) => {
               const utmKey = `${s.utmSource} / ${s.utmMedium || 'none'}`;
               utmMap[utmKey] = (utmMap[utmKey] || 0) + 1;
             }
-          } else if (s.createdAt < prevEndIso) {
+          } else if (createdIso < prevEndIso) {
             prevSessions += 1;
             if (s.isBounce) prevBounceSessions += 1;
             prevDurationSeconds += Number(s.durationSeconds || 0);
@@ -394,11 +594,12 @@ const getAnalyticsStats = async (req, res) => {
       try {
         const pageviewsSnap = await getDocs(query(collection(db, 'analytics_pageviews'), limit(2500)));
         pageviewsSnap.docs.forEach((docSnap) => {
-          const p = docSnap.data();
-          if (!p.timestamp || p.timestamp < prevStartIso) return;
+          const p = docSnap.data() || {};
+          const viewIso = parseIsoString(p.timestamp || p.createdAt || p.created_at);
+          if (!viewIso || viewIso < prevStartIso) return;
           if (!matchesSubdomain(p.domain)) return;
 
-          if (p.timestamp >= startIso) {
+          if (viewIso >= startIso && viewIso <= endIso) {
             totalPageviews += 1;
             const cleanPath = p.path || '/';
             const dom = p.domain || 'admin-console.ultrahealers.com';
@@ -414,7 +615,7 @@ const getAnalyticsStats = async (req, res) => {
               pageTimeMap[key].count += 1;
               pageTimeMap[key].totalSeconds += Number(p.timeOnPageSeconds);
             }
-          } else if (p.timestamp < prevEndIso) {
+          } else if (viewIso < prevEndIso) {
             prevPageviews += 1;
           }
         });
@@ -426,14 +627,15 @@ const getAnalyticsStats = async (req, res) => {
       try {
         const eventsSnap = await getDocs(query(collection(db, 'analytics_events'), limit(2500)));
         eventsSnap.docs.forEach((docSnap) => {
-          const e = docSnap.data();
-          if (!e.timestamp || e.timestamp < startIso) return;
+          const e = docSnap.data() || {};
+          const eventIso = parseIsoString(e.timestamp || e.createdAt || e.created_at);
+          if (!eventIso || eventIso < startIso || eventIso > endIso) return;
           if (!matchesSubdomain(e.domain)) return;
 
           const dom = e.domain || 'admin-console.ultrahealers.com';
 
           if (e.eventType === 'click' && e.targetElement) {
-            if (!isDateTimeClickDescriptor(e.targetElement)) {
+            if (!isFilterOrDropdownDescriptor(e.targetElement)) {
               const cleanElem = stripUidFromDescriptor(e.targetElement);
               const formatted = formatClickDescriptor(cleanElem);
               const clickKey = `${dom}::${formatted}`;
@@ -444,7 +646,7 @@ const getAnalyticsStats = async (req, res) => {
             }
           }
           if (e.eventType === 'rage_click' && e.targetElement) {
-            if (!isDateTimeClickDescriptor(e.targetElement)) {
+            if (!isFilterOrDropdownDescriptor(e.targetElement)) {
               const cleanElem = stripUidFromDescriptor(e.targetElement);
               const formatted = formatClickDescriptor(cleanElem);
               rageClickMap[formatted] = (rageClickMap[formatted] || 0) + 1;
@@ -513,32 +715,32 @@ const getAnalyticsStats = async (req, res) => {
           const seekerDate = parseDate(p.seeker_joined_at || p.seeker_created_at) || (roles.includes('seeker') ? parseDate(createdAt) : null);
           const healerDate = parseDate(p.healer_joined_at || p.healer_created_at) || (roles.includes('healer') ? (p.role === 'seeker' ? parseDate(p.updated_at || p.last_activity_at || createdAt) : parseDate(createdAt)) : null);
 
-          // 1. Process Seeker Acquisition Point
+          // 1. Process Seeker Acquisition Point (filtered by selected range)
           if ((roles.includes('seeker') || p.role === 'seeker') && seekerDate) {
-            const year = seekerDate.getFullYear();
-            const monthStr = String(seekerDate.getMonth() + 1).padStart(2, '0');
-            const key = `${year}-${monthStr}`;
+            const seekerIso = seekerDate.toISOString();
+            if (range === 'all' || (seekerIso >= startIso && seekerIso <= endIso)) {
+              const { bucketKey, label } = getAcquisitionBucketInfo(seekerDate, acquisitionGranularity);
 
-            if (!monthlyAcquisition[key]) {
-              const monthLabel = seekerDate.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-              monthlyAcquisition[key] = { monthKey: key, label: monthLabel, healers: 0, seekers: 0, total: 0 };
+              if (!monthlyAcquisition[bucketKey]) {
+                monthlyAcquisition[bucketKey] = { monthKey: bucketKey, label, healers: 0, seekers: 0, total: 0 };
+              }
+              monthlyAcquisition[bucketKey].seekers += 1;
+              monthlyAcquisition[bucketKey].total += 1;
             }
-            monthlyAcquisition[key].seekers += 1;
-            monthlyAcquisition[key].total += 1;
           }
 
-          // 2. Process Healer Acquisition Point
+          // 2. Process Healer Acquisition Point (filtered by selected range)
           if ((roles.includes('healer') || p.role === 'healer') && healerDate) {
-            const year = healerDate.getFullYear();
-            const monthStr = String(healerDate.getMonth() + 1).padStart(2, '0');
-            const key = `${year}-${monthStr}`;
+            const healerIso = healerDate.toISOString();
+            if (range === 'all' || (healerIso >= startIso && healerIso <= endIso)) {
+              const { bucketKey, label } = getAcquisitionBucketInfo(healerDate, acquisitionGranularity);
 
-            if (!monthlyAcquisition[key]) {
-              const monthLabel = healerDate.toLocaleString('en-US', { month: 'short', year: 'numeric' });
-              monthlyAcquisition[key] = { monthKey: key, label: monthLabel, healers: 0, seekers: 0, total: 0 };
+              if (!monthlyAcquisition[bucketKey]) {
+                monthlyAcquisition[bucketKey] = { monthKey: bucketKey, label, healers: 0, seekers: 0, total: 0 };
+              }
+              monthlyAcquisition[bucketKey].healers += 1;
+              monthlyAcquisition[bucketKey].total += 1;
             }
-            monthlyAcquisition[key].healers += 1;
-            monthlyAcquisition[key].total += 1;
           }
         });
       } catch (err) {
