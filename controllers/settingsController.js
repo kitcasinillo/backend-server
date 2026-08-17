@@ -16,6 +16,7 @@ const DEFAULT_ADMIN_BOOTSTRAP = {
 };
 
 const DEFAULT_WELCOME_EMAILS = {
+  admin_email: 'ultrahealerz@gmail.com',
   seeker_subject: 'Welcome to Ultra Healers, {{name}} - Getting Started',
   seeker_body: `Welcome, {{name}}!\n\nThank you for joining Ultra Healers. We are thrilled to have you in our community of seekers dedicated to personal growth, healing, and holistic well-being.\n\nHere is what you can do right away:\n- Discover Practitioners: Browse verified healers specializing in reiki, meditation, sound therapy, and more.\n- Book 1-on-1 Sessions: Schedule online or in-person appointments at times that suit you.\n- Explore Retreats: Find transformative wellness retreats tailored to your goals.\n\nExplore Healers & Services:\n{{dashboardUrl}}`,
   healer_subject: 'Welcome to Ultra Healers, {{name}} - Getting Started as a Practitioner',
@@ -235,7 +236,7 @@ const updateSettings = async (req, res) => {
       });
     }
 
-    const { listing_limit_free, listing_limit_premium, max_images_per_listing, max_file_size_mb, features, pricing, admin_bootstrap, welcome_emails } = req.body;
+    const { listing_limit_free, listing_limit_premium, max_images_per_listing, max_file_size_mb, features, pricing, admin_bootstrap, welcome_emails, admin_email } = req.body;
 
     const settingsRef = doc(db, SETTINGS_COLLECTION, SETTINGS_DOC);
 
@@ -249,7 +250,20 @@ const updateSettings = async (req, res) => {
     if (max_file_size_mb !== undefined) updateData.max_file_size_mb = max_file_size_mb;
     if (features !== undefined) updateData.features = features;
     if (pricing !== undefined) updateData.pricing = pricing;
-    if (welcome_emails !== undefined) updateData.welcome_emails = welcome_emails;
+    if (welcome_emails !== undefined) {
+      updateData.welcome_emails = welcome_emails;
+      if (welcome_emails && welcome_emails.admin_email !== undefined) {
+        updateData.admin_email = welcome_emails.admin_email;
+      }
+    }
+    if (admin_email !== undefined) {
+      updateData.admin_email = admin_email;
+      if (!updateData.welcome_emails) {
+        updateData.welcome_emails = { admin_email };
+      } else {
+        updateData.welcome_emails.admin_email = admin_email;
+      }
+    }
     if (admin_bootstrap !== undefined) {
       updateData.admin_bootstrap = {
         ...DEFAULT_ADMIN_BOOTSTRAP,

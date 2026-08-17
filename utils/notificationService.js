@@ -302,6 +302,57 @@ class NotificationService {
     }
   }
 
+  // Helper to fetch settings/app_config using Client DB or Admin SDK fallback
+  async getSettingsConfig() {
+    // 1. Try existing this.db (Firebase Client SDK)
+    if (this.db) {
+      try {
+        if (typeof this.db.collection === 'function') {
+          const snap = await this.db.collection('settings').doc('app_config').get();
+          if (snap.exists) return snap.data();
+        } else {
+          const settingsRef = doc(this.db, 'settings', 'app_config');
+          const settingsSnap = await getDoc(settingsRef);
+          if (settingsSnap.exists()) return settingsSnap.data();
+        }
+      } catch (err) {
+        console.warn('⚠️ Error fetching settings via this.db:', err.message);
+      }
+    }
+
+    // 2. Try re-getting database instance if this.db was uninitialized
+    try {
+      const dbInstance = getDatabase();
+      if (dbInstance) {
+        this.db = dbInstance;
+        if (typeof dbInstance.collection === 'function') {
+          const snap = await dbInstance.collection('settings').doc('app_config').get();
+          if (snap.exists) return snap.data();
+        } else {
+          const settingsRef = doc(dbInstance, 'settings', 'app_config');
+          const settingsSnap = await getDoc(settingsRef);
+          if (settingsSnap.exists()) return settingsSnap.data();
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ Error fetching settings via getDatabase():', err.message);
+    }
+
+    // 3. Fallback: Firebase Admin SDK
+    try {
+      const { initAdmin } = require('../config/firebaseAdmin');
+      const adminApp = initAdmin();
+      if (adminApp && typeof adminApp.firestore === 'function') {
+        const snap = await adminApp.firestore().collection('settings').doc('app_config').get();
+        if (snap.exists) return snap.data();
+      }
+    } catch (adminErr) {
+      console.warn('⚠️ Error fetching settings via Admin SDK:', adminErr.message);
+    }
+
+    return null;
+  }
+
   // Send welcome email to newly registered seeker or healer
   async sendWelcomeEmail(email, name, role = 'seeker') {
     try {
@@ -320,19 +371,9 @@ class NotificationService {
       // Load custom welcome email settings from database if configured
       let customTemplate = null;
       try {
-        if (this.db) {
-          if (typeof this.db.collection === 'function') {
-            const snap = await this.db.collection('settings').doc('app_config').get();
-            if (snap.exists) {
-              customTemplate = snap.data()?.welcome_emails || null;
-            }
-          } else {
-            const settingsRef = doc(this.db, 'settings', 'app_config');
-            const settingsSnap = await getDoc(settingsRef);
-            if (settingsSnap.exists()) {
-              customTemplate = settingsSnap.data()?.welcome_emails || null;
-            }
-          }
+        const settingsData = await this.getSettingsConfig();
+        if (settingsData) {
+          customTemplate = settingsData.welcome_emails || null;
         }
       } catch (settingsErr) {
         console.warn('⚠️ Could not load welcome email settings from DB:', settingsErr.message);
@@ -392,8 +433,20 @@ class NotificationService {
         return { success: false, error: 'Email service not configured' };
       }
 
+      // Load custom admin notification email from database settings if configured
+      let customAdminEmail = null;
+      try {
+        const settingsData = await this.getSettingsConfig();
+        if (settingsData) {
+          customAdminEmail = settingsData.welcome_emails?.admin_email || settingsData.admin_email || null;
+        }
+      } catch (settingsErr) {
+        console.warn('⚠️ Could not load admin email setting from DB:', settingsErr.message);
+      }
+
       // Determine owner / admin notification recipient email
-      const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL || 
+      const adminEmail = (customAdminEmail && customAdminEmail.trim()) ||
+                         process.env.ADMIN_NOTIFICATION_EMAIL || 
                          process.env.ADMIN_EMAIL || 
                          process.env.OWNER_EMAIL || 
                          process.env.NOTIFICATION_EMAIL || 
