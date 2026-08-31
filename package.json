@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
+    "seed:bookings": "node scripts/seedBookings.js",
     "build": "echo 'Server build complete'",
     "lint": "echo 'Server lint complete'",
     "postinstall": "echo 'Server dependencies installed successfully'",

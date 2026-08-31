@@ -1,7 +1,7 @@
 const { getDatabase } = require('../config/database');
 const { getEmailTransporter } = require('../config/email');
 const { generateHealerEmail, generateSeekerEmail } = require('../utils/emailTemplates');
-const { collection, addDoc, query, where, getDocs } = require('firebase/firestore');
+const { collection, addDoc, query, where, getDocs, orderBy, doc, deleteDoc, updateDoc } = require('firebase/firestore');
 const { sendEvent: sendN8nEvent } = require('../utils/n8n');
 
 // In-memory cache for request deduplication
@@ -328,7 +328,273 @@ const sendChatMessage = async (req, res) => {
   }
 };
 
+// Get all bookings
+const getBookings = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const bookingsRef = collection(db, 'bookings');
+    const q = query(bookingsRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
+
+    const bookings = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: bookings
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching bookings:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Get booking by ID
+const getBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const bookingRef = doc(db, 'bookings', id);
+    // Since doc exists in v9 firestore api but we need standard getDoc
+    const { getDoc } = require('firebase/firestore');
+    const bookingSnap = await getDoc(bookingRef);
+
+    if (!bookingSnap.exists()) {
+      return res.status(404).json({
+        success: false,
+        error: 'Booking not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: bookingSnap.id,
+        ...bookingSnap.data()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching booking:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Cancel (Delete) booking
+const cancelBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const bookingRef = doc(db, 'bookings', id);
+    await updateDoc(bookingRef, {
+      'status.booking-cancelled-by-admin': true,
+      'paymentStatus': 'cancelled',
+      'updatedAt': new Date().toISOString()
+    });
+
+    res.json({
+      success: true,
+      message: 'Booking cancelled (soft-deleted) successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error cancelling booking:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Get all retreat bookings
+const getRetreatBookings = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const bookingsRef = collection(db, 'retreat_bookings');
+    const q = query(bookingsRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
+
+    const bookings = querySnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    res.json({
+      success: true,
+      data: bookings
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching retreat bookings:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Cancel Retreat Booking
+const cancelRetreatBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    // Try updating in retreat_bookings first
+    const retreatRef = doc(db, 'retreat_bookings', id);
+    const { getDoc } = require('firebase/firestore');
+    const retreatSnap = await getDoc(retreatRef);
+
+    if (retreatSnap.exists()) {
+      await updateDoc(retreatRef, {
+        'paymentStatus': 'cancelled',
+        'updatedAt': new Date().toISOString()
+      });
+      return res.json({
+        success: true,
+        message: 'Retreat enrollment cancelled successfully'
+      });
+    }
+
+    // fallback to main bookings collection
+    const bookingRef = doc(db, 'bookings', id);
+    const bookingSnap = await getDoc(bookingRef);
+
+    if (bookingSnap.exists()) {
+       await updateDoc(bookingRef, {
+        'status.booking-cancelled-by-admin': true,
+        'paymentStatus': 'cancelled',
+        'updatedAt': new Date().toISOString()
+      });
+      return res.json({
+        success: true,
+        message: 'Retreat enrollment (from bookings) cancelled successfully'
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Booking not found in any collection'
+    });
+
+  } catch (error) {
+    console.error('❌ Error cancelling retreat booking:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Get single retreat booking
+const getRetreatBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = getDatabase();
+    
+    if (!db) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not initialized'
+      });
+    }
+
+    const { getDoc } = require('firebase/firestore');
+
+    // Try retreat_bookings first
+    const retreatRef = doc(db, 'retreat_bookings', id);
+    const retreatSnap = await getDoc(retreatRef);
+
+    if (retreatSnap.exists()) {
+      return res.json({
+        success: true,
+        data: {
+          id: retreatSnap.id,
+          ...retreatSnap.data()
+        }
+      });
+    }
+
+    // Fallback to bookings
+    const bookingRef = doc(db, 'bookings', id);
+    const bookingSnap = await getDoc(bookingRef);
+
+    if (bookingSnap.exists()) {
+      return res.json({
+        success: true,
+        data: {
+          id: bookingSnap.id,
+          ...bookingSnap.data()
+        }
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      error: 'Retreat booking not found'
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching retreat booking:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createBooking,
-  sendChatMessage
+  getBookings,
+  getBooking,
+  sendChatMessage,
+  cancelBooking,
+  getRetreatBookings,
+  cancelRetreatBooking,
+  getRetreatBooking
 };
