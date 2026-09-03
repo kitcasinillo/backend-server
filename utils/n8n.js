@@ -1,24 +1,37 @@
 const crypto = require('crypto');
 
 // Secure n8n dispatcher with HMAC, anti‑replay metadata, and retries
-const getConfig = () => ({
-  enabled: process.env.N8N_ENABLED === 'true' || !!(process.env.N8N_WEBHOOK_URL || process.env.N8N_API_BASE_URL),
-  webhookUrl: process.env.N8N_WEBHOOK_URL,
-  baseUrl: process.env.N8N_API_BASE_URL,
-  apiKey: process.env.N8N_API_KEY,
-  environment: process.env.NODE_ENV || 'development',
-});
+const cleanUrl = (val) => {
+  if (!val) return '';
+  let str = String(val).trim();
+  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+    str = str.slice(1, -1).trim();
+  }
+  return str;
+};
+
+const getConfig = () => {
+  const webhookUrl = cleanUrl(process.env.N8N_WEBHOOK_URL || process.env.N8N_WEBHOOK || process.env.N8N_URL || process.env.WEBHOOK_URL);
+  const baseUrl = cleanUrl(process.env.N8N_API_BASE_URL || process.env.N8N_BASE_URL);
+  const hasUrl = Boolean(webhookUrl || baseUrl);
+  const enabled = process.env.N8N_ENABLED === 'false' ? false : hasUrl;
+  return {
+    enabled,
+    webhookUrl,
+    baseUrl,
+    apiKey: cleanUrl(process.env.N8N_API_KEY),
+    environment: process.env.NODE_ENV || 'development',
+  };
+};
 
 const resolveUrl = (event) => {
   const { webhookUrl, baseUrl } = getConfig();
   if (webhookUrl && webhookUrl.length > 0) return webhookUrl;
   if (!baseUrl || baseUrl.length === 0) return null;
   const trimmed = baseUrl.replace(/\/$/, '');
-  // Special-case disputes: n8n workflow expects consolidated endpoint /webhook/disputes
   if (String(event).startsWith('dispute.')) {
     return `${trimmed}/webhook/disputes`;
   }
-  // Default convention: single endpoint per event under /webhook/:event
   return `${trimmed}/webhook/${encodeURIComponent(event)}`;
 };
 

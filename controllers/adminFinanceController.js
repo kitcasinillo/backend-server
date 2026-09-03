@@ -65,9 +65,14 @@ const getRevenueStats = async (req, res) => {
           netPlatformRevenue += (breakdown.platformRevenue - breakdown.processingFee);
 
           const isRetreat = (
-            (typeof data.format === 'string' && data.format.toLowerCase().includes('retreat')) ||
-            (typeof data.modality === 'string' && data.modality.toLowerCase().includes('retreat')) ||
-            (typeof data.listingTitle === 'string' && data.listingTitle.toLowerCase().includes('retreat'))
+            (typeof data.bookingType === 'string' && data.bookingType.toLowerCase() === 'retreat') ||
+            (typeof data.type === 'string' && data.type.toLowerCase() === 'retreat') ||
+            !!data.retreatListingId ||
+            (data.bookingType !== 'session' && (
+              (typeof data.format === 'string' && data.format.toLowerCase().includes('retreat')) ||
+              (typeof data.modality === 'string' && data.modality.toLowerCase().includes('retreat')) ||
+              (typeof data.listingTitle === 'string' && data.listingTitle.toLowerCase().includes('retreat'))
+            ))
           );
 
           if (isRetreat) {

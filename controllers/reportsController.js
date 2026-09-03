@@ -131,10 +131,22 @@ const getUserReportData = async (req, res) => {
     const profilesSnap = await getDocs(collection(db, 'profiles'));
     const allProfiles = profilesSnap.docs.map((doc) => {
       const data = doc.data();
+      const rawRoles = Array.isArray(data.roles)
+        ? data.roles
+        : [data.role, data.type].filter(Boolean);
+      const roles = Array.from(new Set(rawRoles));
+
+      const createdAt = toIsoOrNull(data.created_at || data.createdAt) || null;
+      const seekerJoinedAt = toIsoOrNull(data.seeker_joined_at || data.seeker_created_at) || (roles.includes('seeker') ? (data.role === 'healer' ? toIsoOrNull(data.updated_at || data.last_activity_at || createdAt) : createdAt) : null);
+      const healerJoinedAt = toIsoOrNull(data.healer_joined_at || data.healer_created_at) || (roles.includes('healer') ? (data.role === 'seeker' ? toIsoOrNull(data.updated_at || data.last_activity_at || createdAt) : createdAt) : null);
+
       return {
         id: doc.id,
-        role: data.role,
-        createdAt: toIsoOrNull(data.created_at || data.createdAt) || null,
+        role: data.role || (roles[0] || 'seeker'),
+        roles,
+        createdAt,
+        seekerJoinedAt,
+        healerJoinedAt,
         lastActivityAt: toIsoOrNull(data.lastActivityAt || data.last_activity_at) || null,
         onboardingComplete: !!data.onboardingComplete,
         listingsCount: Number(data.listingsCount || 0),
@@ -152,35 +164,42 @@ const getUserReportData = async (req, res) => {
     // =====================================================
     const profilesByDate = {};
 
+    const getDateKeyForIso = (isoStr, gran) => {
+      const createdDate = new Date(isoStr);
+      if (gran === 'Weekly') {
+        const d = new Date(createdDate);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        return d.toISOString().split('T')[0];
+      } else if (gran === 'Monthly') {
+        return isoStr.substring(0, 7);
+      }
+      return isoStr.split('T')[0];
+    };
+
     allProfiles.forEach((profile) => {
-      if (!profile.createdAt) return;
-
-      // ISO string comparison (same pattern as dashboardController)
-      if (profile.createdAt >= startIso && profile.createdAt <= endIso) {
-        let dateKey = '';
-        const createdDate = new Date(profile.createdAt);
-
-        if (granularity === 'Weekly') {
-          // Group by the start of the week (Monday)
-          const d = new Date(createdDate);
-          const day = d.getDay();
-          const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-          d.setDate(diff);
-          dateKey = d.toISOString().split('T')[0];
-        } else if (granularity === 'Monthly') {
-          dateKey = profile.createdAt.substring(0, 7); // YYYY-MM
-        } else {
-          dateKey = profile.createdAt.split('T')[0]; // YYYY-MM-DD (Daily)
-        }
-
-        if (!profilesByDate[dateKey]) {
-          profilesByDate[dateKey] = { seekers: 0, healers: 0 };
-        }
-
-        if (profile.role === 'healer') {
-          profilesByDate[dateKey].healers++;
-        } else if (profile.role === 'seeker') {
+      // Track Seeker Signup on seekerJoinedAt date
+      if (profile.roles.includes('seeker') || profile.role === 'seeker') {
+        const date = profile.seekerJoinedAt || profile.createdAt;
+        if (date && date >= startIso && date <= endIso) {
+          const dateKey = getDateKeyForIso(date, granularity);
+          if (!profilesByDate[dateKey]) {
+            profilesByDate[dateKey] = { seekers: 0, healers: 0 };
+          }
           profilesByDate[dateKey].seekers++;
+        }
+      }
+
+      // Track Healer Signup on healerJoinedAt date
+      if (profile.roles.includes('healer') || profile.role === 'healer') {
+        const date = profile.healerJoinedAt || profile.createdAt;
+        if (date && date >= startIso && date <= endIso) {
+          const dateKey = getDateKeyForIso(date, granularity);
+          if (!profilesByDate[dateKey]) {
+            profilesByDate[dateKey] = { seekers: 0, healers: 0 };
+          }
+          profilesByDate[dateKey].healers++;
         }
       }
     });

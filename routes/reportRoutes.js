@@ -7,6 +7,7 @@ const {
   getDisputeReportData,
   getBookingReportData
 } = require('../controllers/reportsController');
+const { getAnalyticsStats } = require('../controllers/analyticsController');
 
 const router = express.Router();
 
@@ -27,5 +28,8 @@ router.get('/reports/disputes', getDisputeReportData);
 
 // Get booking report data
 router.get('/reports/bookings', getBookingReportData);
+
+// Get web analytics report data
+router.get('/reports/analytics', getAnalyticsStats);
 
 module.exports = router;
