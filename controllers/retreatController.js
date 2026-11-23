@@ -68,7 +68,11 @@ exports.getRetreatById = async (req, res) => {
       if (!docSnap.exists) {
         return res.status(404).json({ success: false, error: 'Retreat not found' })
       }
-      retreat = mapListingToPublic({ id: docSnap.id, ...docSnap.data() })
+      const retreatData = docSnap.data() || {}
+      if (String(retreatData.status || '').toLowerCase() !== 'active' || retreatData.disabled_by_account_status === true) {
+        return res.status(404).json({ success: false, error: 'Retreat is currently unavailable' })
+      }
+      retreat = mapListingToPublic({ id: docSnap.id, ...retreatData })
     } catch (adminErr) {
       const db = getDatabase()
       if (!db) {
@@ -80,7 +84,11 @@ exports.getRetreatById = async (req, res) => {
       if (!docSnap.exists()) {
         return res.status(404).json({ success: false, error: 'Retreat not found' })
       }
-      retreat = mapListingToPublic({ id: docSnap.id, ...docSnap.data() })
+      const retreatData = docSnap.data() || {}
+      if (String(retreatData.status || '').toLowerCase() !== 'active' || retreatData.disabled_by_account_status === true) {
+        return res.status(404).json({ success: false, error: 'Retreat is currently unavailable' })
+      }
+      retreat = mapListingToPublic({ id: docSnap.id, ...retreatData })
     }
     res.json({ success: true, retreat })
   } catch (err) {

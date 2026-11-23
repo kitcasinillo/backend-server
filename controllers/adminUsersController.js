@@ -1,8 +1,65 @@
-const { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
+const { collection, deleteDoc, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 
 const PROFILES_COLLECTION = 'profiles';
 const BOOKINGS_COLLECTION = 'bookings';
+const LISTINGS_COLLECTION = 'listings';
+const RETREAT_LISTINGS_COLLECTION = 'retreat_listings';
+
+const isActiveListingStatus = (status) => {
+  const normalized = String(status || '').toLowerCase().trim();
+  return ['active', 'approved', 'published', 'live'].includes(normalized);
+};
+
+const syncHealerContentStatus = async (db, healerId, { shouldDisable, reason, updatedAt }) => {
+  const result = { affectedListings: 0, affectedRetreats: 0 };
+
+  const processCollection = async (collectionName, counterKey) => {
+    const snap = await getDocs(query(collection(db, collectionName), where('healerId', '==', healerId)));
+    const updates = [];
+
+    for (const itemDoc of snap.docs) {
+      const data = itemDoc.data() || {};
+      if (shouldDisable) {
+        if (isActiveListingStatus(data.status)) {
+          updates.push(
+            updateDoc(itemDoc.ref, {
+              previous_status: data.status || 'active',
+              status: 'inactive',
+              disabled_by_account_status: true,
+              disabled_reason: reason || null,
+              updated_at: updatedAt,
+              updatedAt: updatedAt,
+            })
+          );
+        }
+      } else if (data.disabled_by_account_status === true) {
+        updates.push(
+          updateDoc(itemDoc.ref, {
+            status: data.previous_status || 'active',
+            previous_status: null,
+            disabled_by_account_status: false,
+            disabled_reason: null,
+            updated_at: updatedAt,
+            updatedAt: updatedAt,
+          })
+        );
+      }
+    }
+
+    if (updates.length > 0) {
+      await Promise.all(updates);
+      result[counterKey] = updates.length;
+    }
+  };
+
+  await Promise.all([
+    processCollection(LISTINGS_COLLECTION, 'affectedListings'),
+    processCollection(RETREAT_LISTINGS_COLLECTION, 'affectedRetreats'),
+  ]);
+
+  return result;
+};
 
 const toIsoOrNull = (value) => {
   if (!value) return null;
@@ -23,8 +80,25 @@ const fullNameFromProfile = (data = {}, fallback = 'Unknown User') => {
   return fullName || data.display_name || data.name || fallback;
 };
 
-const userStatusFromProfile = (data = {}) => {
+const userStatusFromProfile = (data = {}, role = null) => {
+  if (role === 'healer' || role === 'seeker') {
+    const roleStatus = data[`${role}_status`];
+    const roleDeleted = data[`${role}_deleted`];
+    const roleSuspended = data[`${role}_suspended`];
+    const hasRoleScopedState =
+      roleStatus !== undefined || roleDeleted !== undefined || roleSuspended !== undefined;
+
+    if (hasRoleScopedState) {
+      const explicitRole = String(roleStatus || '').toLowerCase();
+      if (explicitRole === 'deleted' || roleDeleted === true) return 'Deleted';
+      if (explicitRole === 'suspended' || explicitRole === 'blocked' || explicitRole === 'inactive' || roleSuspended === true) return 'Suspended';
+      if (explicitRole === 'pending') return 'Pending';
+      return 'Active';
+    }
+  }
+
   const explicit = String(data.status || data.account_status || '').toLowerCase();
+  if (explicit === 'deleted' || data.is_deleted === true || data.deleted === true) return 'Deleted';
   if (explicit === 'suspended' || explicit === 'blocked' || explicit === 'inactive') return 'Suspended';
   if (explicit === 'pending') return 'Pending';
   if (data.is_suspended === true || data.suspended === true || data.disabled === true || data.is_disabled === true) return 'Suspended';
@@ -40,7 +114,7 @@ const mapHealerListItem = (profileDoc) => {
     name: fullNameFromProfile(d, 'Healer'),
     email: d.email || d.contact_email || '',
     subscription,
-    status: userStatusFromProfile(d),
+    status: userStatusFromProfile(d, 'healer'),
     totalEarned: toNumber(d.total_earned || d.earnings_total || d.totalEarnings || d.total_income, 0),
     joinedDate: toIsoOrNull(d.created_at || d.createdAt || d.joined_at) || null,
     avatarUrl: d.profile_picture || d.avatar_url || d.photo_url || '',
@@ -57,7 +131,7 @@ const mapSeekerListItem = (profileDoc) => {
     id: profileDoc.id,
     name: fullNameFromProfile(d, 'Seeker'),
     email: d.email || d.contact_email || '',
-    status: userStatusFromProfile(d),
+    status: userStatusFromProfile(d, 'seeker'),
     totalSpent: toNumber(d.total_spent || d.lifetime_spend || d.totalSpent, 0),
     joinedDate: toIsoOrNull(d.created_at || d.createdAt || d.joined_at) || null,
     avatarUrl: d.profile_picture || d.avatar_url || d.photo_url || '',
@@ -240,7 +314,7 @@ const getHealerDetail = async (req, res) => {
       role: 'healer',
       name: fullNameFromProfile(profile, 'Healer'),
       email: profile.email || profile.contact_email || '',
-      status: userStatusFromProfile(profile),
+      status: userStatusFromProfile(profile, 'healer'),
       subscription: profile.subscription_type === 'premium' || profile.is_premium === true ? 'Premium' : 'Free',
       totalEarned: totalEarnedFromBookings || toNumber(profile.total_earned || profile.earnings_total || profile.totalEarnings || profile.total_income, 0),
       pendingPayout: toNumber(profile.pending_payout || profile.pendingPayout || profile.pending_balance, 0),
@@ -287,7 +361,7 @@ const getSeekerDetail = async (req, res) => {
       role: 'seeker',
       name: fullNameFromProfile(profile, 'Seeker'),
       email: profile.email || profile.contact_email || '',
-      status: userStatusFromProfile(profile),
+      status: userStatusFromProfile(profile, 'seeker'),
       totalSpent: toNumber(profile.total_spent || profile.lifetime_spend || profile.totalSpent, totalSpentFromBookings),
       sessionsBooked: bookings.length,
       retreatsAttended: toNumber(profile.retreats_attended || profile.retreatsAttended, 0),
@@ -306,7 +380,7 @@ const getSeekerDetail = async (req, res) => {
   }
 };
 
-const updateUserSuspension = async (req, res) => {
+const updateUserSuspension = (targetRole) => async (req, res) => {
   try {
     const db = getDatabase();
     if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
@@ -325,33 +399,185 @@ const updateUserSuspension = async (req, res) => {
     }
 
     const previous = profileSnap.data() || {};
-    const nextStatus = suspended ? 'suspended' : 'active';
+    const previousStatus = userStatusFromProfile(previous, targetRole);
+    const isRoleDeleted = previous[`${targetRole}_deleted`] === true || String(previous[`${targetRole}_status`] || '').toLowerCase() === 'deleted';
+    const nextStatus = isRoleDeleted ? 'deleted' : (suspended ? 'suspended' : 'active');
     const updatedAt = new Date().toISOString();
 
     await updateDoc(profileRef, {
-      status: nextStatus,
-      account_status: nextStatus,
-      suspended,
-      is_suspended: suspended,
-      suspension_reason: suspended ? reason : null,
-      suspended_at: suspended ? updatedAt : null,
-      unsuspended_at: suspended ? null : updatedAt,
+      [`${targetRole}_status`]: nextStatus,
+      [`${targetRole}_suspended`]: suspended,
+      [`${targetRole}_suspension_reason`]: suspended ? reason : null,
+      [`${targetRole}_suspended_at`]: suspended ? updatedAt : null,
+      [`${targetRole}_unsuspended_at`]: suspended ? null : updatedAt,
+      // Clear legacy global restriction flags so suspending one role never affects the other role
+      status: 'active',
+      account_status: 'active',
+      suspended: false,
+      is_suspended: false,
+      deleted: false,
+      is_deleted: false,
       updated_at: updatedAt,
     });
+
+    const contentSync = targetRole === 'healer'
+      ? await syncHealerContentStatus(db, id, {
+          shouldDisable: suspended || isRoleDeleted,
+          reason: suspended ? 'healer_suspended' : null,
+          updatedAt,
+        })
+      : { affectedListings: 0, affectedRetreats: 0 };
 
     return res.json({
       success: true,
       data: {
         id,
-        previousStatus: userStatusFromProfile(previous),
-        status: suspended ? 'Suspended' : 'Active',
+        role: targetRole,
+        previousStatus,
+        status: isRoleDeleted ? 'Deleted' : (suspended ? 'Suspended' : 'Active'),
         suspended,
         reason: suspended ? reason : null,
         updatedAt,
+        ...contentSync,
       },
     });
   } catch (error) {
     console.error('❌ Error updating admin user suspension:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+const updateUserSoftDelete = (targetRole) => async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const { deleted, reason = null } = req.body || {};
+
+    if (typeof deleted !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'deleted boolean is required' });
+    }
+
+    const profileRef = doc(db, PROFILES_COLLECTION, id);
+    const profileSnap = await getDoc(profileRef);
+    if (!profileSnap.exists()) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const previous = profileSnap.data() || {};
+    const previousStatus = userStatusFromProfile(previous, targetRole);
+    const wasRoleSuspended = previous[`${targetRole}_suspended`] === true;
+    const restoredStatus = wasRoleSuspended ? 'suspended' : 'active';
+    const nextStatus = deleted ? 'deleted' : restoredStatus;
+    const updatedAt = new Date().toISOString();
+
+    await updateDoc(profileRef, {
+      [`${targetRole}_status`]: nextStatus,
+      [`${targetRole}_deleted`]: deleted,
+      [`${targetRole}_deletion_reason`]: deleted ? reason : null,
+      [`${targetRole}_deleted_at`]: deleted ? updatedAt : null,
+      [`${targetRole}_restored_at`]: deleted ? null : updatedAt,
+      // Clear legacy global restriction flags so deleting one role never affects the other role
+      status: 'active',
+      account_status: 'active',
+      suspended: false,
+      is_suspended: false,
+      deleted: false,
+      is_deleted: false,
+      updated_at: updatedAt,
+    });
+
+    const contentSync = targetRole === 'healer'
+      ? await syncHealerContentStatus(db, id, {
+          shouldDisable: deleted || wasRoleSuspended,
+          reason: deleted ? 'healer_deleted' : (wasRoleSuspended ? 'healer_suspended' : null),
+          updatedAt,
+        })
+      : { affectedListings: 0, affectedRetreats: 0 };
+
+    return res.json({
+      success: true,
+      data: {
+        id,
+        role: targetRole,
+        previousStatus,
+        status: deleted ? 'Deleted' : (wasRoleSuspended ? 'Suspended' : 'Active'),
+        deleted,
+        reason: deleted ? reason : null,
+        updatedAt,
+        ...contentSync,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error updating admin user soft delete:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+const permanentDeleteUser = (targetRole) => async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const profileRef = doc(db, PROFILES_COLLECTION, id);
+    const profileSnap = await getDoc(profileRef);
+    if (!profileSnap.exists()) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const profileData = profileSnap.data() || {};
+    const currentStatus = userStatusFromProfile(profileData, targetRole);
+    if (currentStatus !== 'Deleted') {
+      return res.status(400).json({
+        success: false,
+        error: 'Account must be soft-deleted before it can be permanently deleted.',
+      });
+    }
+
+    // Delete all associated listings and retreat_listings for this user
+    const [listingsSnap, retreatsSnap] = await Promise.all([
+      getDocs(query(collection(db, LISTINGS_COLLECTION), where('healerId', '==', id))),
+      getDocs(query(collection(db, RETREAT_LISTINGS_COLLECTION), where('healerId', '==', id))),
+    ]);
+
+    await Promise.all([
+      ...listingsSnap.docs.map((itemDoc) => deleteDoc(itemDoc.ref)),
+      ...retreatsSnap.docs.map((itemDoc) => deleteDoc(itemDoc.ref)),
+    ]);
+
+    // Delete the Firestore profile document
+    await deleteDoc(profileRef);
+
+    // Attempt to delete the Firebase Auth user as well
+    let authDeleted = false;
+    try {
+      const { initAdmin } = require('../config/firebaseAdmin');
+      const adminApp = initAdmin();
+      await adminApp.auth().deleteUser(id);
+      authDeleted = true;
+    } catch (authErr) {
+      if (authErr?.code === 'auth/user-not-found') {
+        authDeleted = true;
+      } else {
+        console.warn('⚠️ Firebase Auth user deletion skipped or failed:', authErr?.message || authErr);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        id,
+        role: targetRole,
+        deletedListings: listingsSnap.size,
+        deletedRetreats: retreatsSnap.size,
+        authDeleted,
+        deletedAt: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error permanently deleting user:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 };
@@ -493,5 +719,7 @@ module.exports = {
   getHealerDetail,
   getSeekerDetail,
   updateUserSuspension,
+  updateUserSoftDelete,
+  permanentDeleteUser,
   listAuthUsers,
 };

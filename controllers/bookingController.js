@@ -6,7 +6,36 @@ const {
   generateSeekerEmail, 
   generateSeekerText 
 } = require('../utils/emailTemplates');
-const { collection, addDoc, query, where, getDocs } = require('firebase/firestore');
+const { collection, addDoc, query, where, getDocs, doc, getDoc } = require('firebase/firestore');
+
+const isProfileRestricted = (d = {}) => {
+  const hasHealerScopedState =
+    d.healer_status !== undefined || d.healer_suspended !== undefined || d.healer_deleted !== undefined;
+  if (hasHealerScopedState) {
+    const hs = String(d.healer_status || '').toLowerCase();
+    return (
+      hs === 'deleted' ||
+      hs === 'suspended' ||
+      hs === 'blocked' ||
+      hs === 'inactive' ||
+      d.healer_deleted === true ||
+      d.healer_suspended === true
+    );
+  }
+  const status = String(d.status || d.account_status || '').toLowerCase();
+  return (
+    status === 'deleted' ||
+    status === 'suspended' ||
+    status === 'blocked' ||
+    status === 'inactive' ||
+    d.is_deleted === true ||
+    d.deleted === true ||
+    d.is_suspended === true ||
+    d.suspended === true ||
+    d.disabled === true ||
+    d.is_disabled === true
+  );
+};
 const { sendEvent: sendN8nEvent } = require('../utils/n8n');
 
 // In-memory cache for request deduplication
@@ -80,6 +109,19 @@ const createBooking = async (req, res) => {
     let existingBooking = null;
     const db = getDatabase();
     if (db) {
+      try {
+        const healerSnap = await getDoc(doc(db, 'profiles', healerId));
+        if (healerSnap.exists() && isProfileRestricted(healerSnap.data() || {})) {
+          pendingRequests.delete(paymentIntentId);
+          return res.status(403).json({
+            success: false,
+            error: 'This healer is currently unavailable and cannot accept new bookings.'
+          });
+        }
+      } catch (healerCheckError) {
+        console.warn('⚠️ Could not verify healer availability before booking:', healerCheckError.message);
+      }
+
       try {
         const bookingsRef = collection(db, 'bookings');
         const q = query(bookingsRef, where('paymentIntentId', '==', paymentIntentId));
