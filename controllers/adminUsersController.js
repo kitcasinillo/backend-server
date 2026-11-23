@@ -198,6 +198,7 @@ const listHealers = async (req, res) => {
     const allHealers = docs.map(mapHealerListItem);
 
     const inRange = allHealers.filter(item => {
+      if (!startIso && !endIso) return true;
       if (!item.joinedDate) return false;
       const joined = item.joinedDate;
       return (!startIso || joined >= startIso) && (!endIso || joined <= endIso);
@@ -255,6 +256,7 @@ const listSeekers = async (req, res) => {
     const allSeekers = docs.map(mapSeekerListItem);
 
     const inRange = allSeekers.filter(item => {
+      if (!startIso && !endIso) return true;
       if (!item.joinedDate) return false;
       const joined = item.joinedDate;
       return (!startIso || joined >= startIso) && (!endIso || joined <= endIso);

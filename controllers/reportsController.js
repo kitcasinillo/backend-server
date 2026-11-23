@@ -1090,9 +1090,16 @@ const getPlatformOverviewData = async (req, res) => {
         const start = new Date(); start.setDate(now.getDate() - 7); start.setHours(0, 0, 0, 0);
         startIso = start.toISOString();
       } else if (range === 'This Month') {
-        startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Year') {
+        const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'All Time') {
+        startIso = new Date(0).toISOString();
       } else {
-        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
       }
     }
 
@@ -1276,9 +1283,16 @@ const getDisputeReportData = async (req, res) => {
         const start = new Date(); start.setDate(now.getDate() - 7); start.setHours(0, 0, 0, 0);
         startIso = start.toISOString();
       } else if (range === 'This Month') {
-        startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Year') {
+        const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'All Time') {
+        startIso = new Date(0).toISOString();
       } else {
-        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
       }
     }
 
