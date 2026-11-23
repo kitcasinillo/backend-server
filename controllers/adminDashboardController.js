@@ -1,19 +1,19 @@
-const { collection, getDocs, query, limit, orderBy, where, getCountFromServer } = require('firebase/firestore');
+const { collection, getDocs, query, limit, orderBy } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
+const { queryProfilesByRole } = require('../utils/profileRoles');
 
 const getDashboardStats = async (req, res) => {
   try {
     const db = getDatabase();
     if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
 
-    // 1. Get counts using getCountFromServer
-    const healersQuery = query(collection(db, 'profiles'), where('role', '==', 'healer'));
-    const healersSnap = await getCountFromServer(healersQuery);
-    const totalHealers = healersSnap.data().count;
-
-    const seekersQuery = query(collection(db, 'profiles'), where('role', '==', 'seeker'));
-    const seekersSnap = await getCountFromServer(seekersQuery);
-    const totalSeekers = seekersSnap.data().count;
+    // 1. Get healer and seeker counts across roles[] (with legacy role fallback)
+    const [healerDocs, seekerDocs] = await Promise.all([
+      queryProfilesByRole(db, 'healer', 1000),
+      queryProfilesByRole(db, 'seeker', 1000),
+    ]);
+    const totalHealers = healerDocs.length;
+    const totalSeekers = seekerDocs.length;
 
     const { range = 'this_month' } = req.query;
 

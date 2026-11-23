@@ -1,5 +1,6 @@
 const { getDatabase } = require('../config/database');
 const { collection, getDocs, query, limit } = require('firebase/firestore');
+const { hasRole } = require('../utils/profileRoles');
 
 // Map Firestore healer profile to search result shape expected by seeker app
 const mapHealerToSearchResult = (doc) => {
@@ -94,7 +95,7 @@ const searchHealers = async (req, res) => {
     const activeHealerDocs = snapshot.docs.filter((doc) => {
       try {
         const d = doc.data() || {};
-        if (d.role && String(d.role).toLowerCase() !== 'healer') {
+        if (!hasRole(d, 'healer')) {
           return false;
         }
         if (isProfileRestricted(d)) {
@@ -149,7 +150,7 @@ const adminSearchHealers = async (req, res) => {
     const results = snapshot.docs
       .map((doc) => {
         const d = doc.data() || {};
-        if (d.role && String(d.role).toLowerCase() !== 'healer') {
+        if (!hasRole(d, 'healer')) {
           return null;
         }
 

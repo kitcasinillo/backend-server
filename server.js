@@ -253,4 +253,4 @@ app.listen(PORT, () => {
   }
 });
 
-module.exports = app; // Trigger nodemon reload after permanent delete route changes
+module.exports = app; // Trigger nodemon reload after role-scoped permanent delete changes

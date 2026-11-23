@@ -1,5 +1,6 @@
 const { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
+const { queryProfilesByRole } = require('../utils/profileRoles');
 
 const PROFILES_COLLECTION = 'profiles';
 const LISTINGS_COLLECTION = 'listings';
@@ -78,8 +79,8 @@ const buildListingListItem = (docSnap, healerMap, source = 'session') => {
 };
 
 const loadHealerMap = async (db) => {
-  const profileSnap = await getDocs(query(collection(db, PROFILES_COLLECTION), where('role', '==', 'healer'), limit(300)));
-  return new Map(profileSnap.docs.map((profileDoc) => {
+  const healerDocs = await queryProfilesByRole(db, 'healer', 300);
+  return new Map(healerDocs.map((profileDoc) => {
     const data = profileDoc.data() || {};
     const name = `${data.first_name || ''} ${data.last_name || ''}`.trim() || data.display_name || data.name || 'Unknown Healer';
     return [profileDoc.id, { id: profileDoc.id, name, email: data.email || data.contact_email || '' }];

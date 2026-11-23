@@ -1,5 +1,6 @@
 const { collection, deleteDoc, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
+const { getProfileRoles, queryProfilesByRole } = require('../utils/profileRoles');
 
 const PROFILES_COLLECTION = 'profiles';
 const BOOKINGS_COLLECTION = 'bookings';
@@ -161,8 +162,7 @@ const listProfilesByRole = async (role) => {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
-  const snapshot = await getDocs(query(collection(db, PROFILES_COLLECTION), where('role', '==', role), limit(250)));
-  return snapshot.docs;
+  return queryProfilesByRole(db, role, 250);
 };
 
 const matchesSearch = (item, search) => {
@@ -536,21 +536,67 @@ const permanentDeleteUser = (targetRole) => async (req, res) => {
       });
     }
 
-    // Delete all associated listings and retreat_listings for this user
-    const [listingsSnap, retreatsSnap] = await Promise.all([
-      getDocs(query(collection(db, LISTINGS_COLLECTION), where('healerId', '==', id))),
-      getDocs(query(collection(db, RETREAT_LISTINGS_COLLECTION), where('healerId', '==', id))),
-    ]);
+    const existingRoles = getProfileRoles(profileData);
+    const remainingRoles = existingRoles.filter((r) => r !== targetRole);
+    const deletedAt = new Date().toISOString();
 
-    await Promise.all([
-      ...listingsSnap.docs.map((itemDoc) => deleteDoc(itemDoc.ref)),
-      ...retreatsSnap.docs.map((itemDoc) => deleteDoc(itemDoc.ref)),
-    ]);
+    let deletedListings = 0;
+    let deletedRetreats = 0;
 
-    // Delete the Firestore profile document
+    // Delete listings & retreats when deleting a healer role, or when deleting the entire account
+    if (targetRole === 'healer' || remainingRoles.length === 0) {
+      const [listingsSnap, retreatsSnap] = await Promise.all([
+        getDocs(query(collection(db, LISTINGS_COLLECTION), where('healerId', '==', id))),
+        getDocs(query(collection(db, RETREAT_LISTINGS_COLLECTION), where('healerId', '==', id))),
+      ]);
+
+      await Promise.all([
+        ...listingsSnap.docs.map((itemDoc) => deleteDoc(itemDoc.ref)),
+        ...retreatsSnap.docs.map((itemDoc) => deleteDoc(itemDoc.ref)),
+      ]);
+
+      deletedListings = listingsSnap.size;
+      deletedRetreats = retreatsSnap.size;
+    }
+
+    // If another role remains (dual-role user), remove only targetRole and preserve the account for the remaining role
+    if (remainingRoles.length > 0) {
+      const nextPrimaryRole = remainingRoles[0];
+      await updateDoc(profileRef, {
+        roles: remainingRoles,
+        role: nextPrimaryRole,
+        type: nextPrimaryRole,
+        [`${targetRole}_status`]: null,
+        [`${targetRole}_suspended`]: false,
+        [`${targetRole}_suspension_reason`]: null,
+        [`${targetRole}_suspended_at`]: null,
+        [`${targetRole}_unsuspended_at`]: null,
+        [`${targetRole}_deleted`]: false,
+        [`${targetRole}_deletion_reason`]: null,
+        [`${targetRole}_deleted_at`]: null,
+        [`${targetRole}_restored_at`]: null,
+        [`${targetRole}_joined_at`]: null,
+        updated_at: deletedAt,
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          id,
+          role: targetRole,
+          accountDeleted: false,
+          remainingRoles,
+          deletedListings,
+          deletedRetreats,
+          authDeleted: false,
+          deletedAt,
+        },
+      });
+    }
+
+    // No other roles remain: permanently delete the Firestore profile document and Firebase Auth user
     await deleteDoc(profileRef);
 
-    // Attempt to delete the Firebase Auth user as well
     let authDeleted = false;
     try {
       const { initAdmin } = require('../config/firebaseAdmin');
@@ -570,10 +616,12 @@ const permanentDeleteUser = (targetRole) => async (req, res) => {
       data: {
         id,
         role: targetRole,
-        deletedListings: listingsSnap.size,
-        deletedRetreats: retreatsSnap.size,
+        accountDeleted: true,
+        remainingRoles: [],
+        deletedListings,
+        deletedRetreats,
         authDeleted,
-        deletedAt: new Date().toISOString(),
+        deletedAt,
       },
     });
   } catch (error) {
