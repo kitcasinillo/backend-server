@@ -106,6 +106,15 @@ const userStatusFromProfile = (data = {}, role = null) => {
   return 'Active';
 };
 
+const isProfileVerified = (data = {}) => {
+  const status = String(data.verification_status || '').toLowerCase().trim();
+  if (status === 'verified') return true;
+  if (status === 'unverified' || status === 'rejected' || status === 'pending') return false;
+  if (typeof data.is_verified === 'boolean') return data.is_verified;
+  if (typeof data.verified === 'boolean') return data.verified;
+  return Boolean(data.email_verified);
+};
+
 const mapHealerListItem = (profileDoc) => {
   const d = profileDoc.data() || {};
   const subscription = d.subscription_type === 'premium' || d.is_premium === true ? 'Premium' : 'Free';
@@ -116,6 +125,7 @@ const mapHealerListItem = (profileDoc) => {
     email: d.email || d.contact_email || '',
     subscription,
     status: userStatusFromProfile(d, 'healer'),
+    verified: isProfileVerified(d),
     totalEarned: toNumber(d.total_earned || d.earnings_total || d.totalEarnings || d.total_income, 0),
     joinedDate: toIsoOrNull(d.created_at || d.createdAt || d.joined_at) || null,
     avatarUrl: d.profile_picture || d.avatar_url || d.photo_url || '',
@@ -133,6 +143,7 @@ const mapSeekerListItem = (profileDoc) => {
     name: fullNameFromProfile(d, 'Seeker'),
     email: d.email || d.contact_email || '',
     status: userStatusFromProfile(d, 'seeker'),
+    verified: isProfileVerified(d),
     totalSpent: toNumber(d.total_spent || d.lifetime_spend || d.totalSpent, 0),
     joinedDate: toIsoOrNull(d.created_at || d.createdAt || d.joined_at) || null,
     avatarUrl: d.profile_picture || d.avatar_url || d.photo_url || '',
@@ -317,6 +328,7 @@ const getHealerDetail = async (req, res) => {
       name: fullNameFromProfile(profile, 'Healer'),
       email: profile.email || profile.contact_email || '',
       status: userStatusFromProfile(profile, 'healer'),
+      verified: isProfileVerified(profile),
       subscription: profile.subscription_type === 'premium' || profile.is_premium === true ? 'Premium' : 'Free',
       totalEarned: totalEarnedFromBookings || toNumber(profile.total_earned || profile.earnings_total || profile.totalEarnings || profile.total_income, 0),
       pendingPayout: toNumber(profile.pending_payout || profile.pendingPayout || profile.pending_balance, 0),
@@ -364,6 +376,7 @@ const getSeekerDetail = async (req, res) => {
       name: fullNameFromProfile(profile, 'Seeker'),
       email: profile.email || profile.contact_email || '',
       status: userStatusFromProfile(profile, 'seeker'),
+      verified: isProfileVerified(profile),
       totalSpent: toNumber(profile.total_spent || profile.lifetime_spend || profile.totalSpent, totalSpentFromBookings),
       sessionsBooked: bookings.length,
       retreatsAttended: toNumber(profile.retreats_attended || profile.retreatsAttended, 0),
@@ -790,6 +803,66 @@ const listAuthUsers = async (req, res) => {
   }
 };
 
+const updateUserVerification = (targetRole) => async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const { verified, reason } = req.body || {};
+    if (typeof verified !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'verified (boolean) is required' });
+    }
+
+    const profileRef = doc(db, PROFILES_COLLECTION, id);
+    const profileSnap = await getDoc(profileRef);
+    if (!profileSnap.exists()) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const updatedAt = new Date().toISOString();
+    const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim() : null;
+
+    await updateDoc(profileRef, {
+      is_verified: verified,
+      verified,
+      verification_status: verified ? 'verified' : 'unverified',
+      email_verified: verified,
+      verified_at: verified ? updatedAt : null,
+      unverified_at: verified ? null : updatedAt,
+      verification_reason: cleanReason,
+      updated_at: updatedAt,
+    });
+
+    // Best-effort sync with Firebase Auth emailVerified flag
+    let authSynced = false;
+    try {
+      const { initAdmin } = require('../config/firebaseAdmin');
+      const adminApp = initAdmin();
+      await adminApp.auth().updateUser(id, { emailVerified: verified });
+      authSynced = true;
+    } catch (authErr) {
+      console.warn('⚠️ Firebase Auth emailVerified sync skipped or failed:', authErr?.message || authErr);
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        id,
+        role: targetRole,
+        verified,
+        verificationStatus: verified ? 'verified' : 'unverified',
+        reason: cleanReason,
+        authSynced,
+        updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error updating user verification:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   listHealers,
   listSeekers,
@@ -797,6 +870,7 @@ module.exports = {
   getSeekerDetail,
   updateUserSuspension,
   updateUserSoftDelete,
+  updateUserVerification,
   permanentDeleteUser,
   listAuthUsers,
 };
