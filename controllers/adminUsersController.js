@@ -596,6 +596,33 @@ const permanentDeleteUser = (targetRole) => async (req, res) => {
       });
     }
 
+    // Preserve the user's name on any disputes before removing their profile so historical records retain it
+    const preservedName = fullNameFromProfile(profileData, '');
+    if (preservedName) {
+      try {
+        const [seekerDisputesSnap, healerDisputesSnap] = await Promise.all([
+          getDocs(query(collection(db, 'disputes'), where('seekerId', '==', id))),
+          getDocs(query(collection(db, 'disputes'), where('healerId', '==', id))),
+        ]);
+        const namePatches = [];
+        seekerDisputesSnap.forEach((d) => {
+          if (!d.data()?.seekerName) {
+            namePatches.push(updateDoc(d.ref, { seekerName: preservedName }));
+          }
+        });
+        healerDisputesSnap.forEach((d) => {
+          if (!d.data()?.healerName) {
+            namePatches.push(updateDoc(d.ref, { healerName: preservedName }));
+          }
+        });
+        if (namePatches.length > 0) {
+          await Promise.all(namePatches);
+        }
+      } catch (preserveErr) {
+        console.warn('⚠️ Failed to snapshot user name on disputes before deletion:', preserveErr?.message || preserveErr);
+      }
+    }
+
     // No other roles remain: permanently delete the Firestore profile document and Firebase Auth user
     await deleteDoc(profileRef);
 

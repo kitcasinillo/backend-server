@@ -6,7 +6,8 @@ const {
   addEvidence,
   respond,
   decide,
-  notifyEmail
+  notifyEmail,
+  deleteDispute
 } = require('../controllers/disputeController');
 
 const router = express.Router();
@@ -31,5 +32,8 @@ router.post('/disputes/:id/decision', decide);
 
 // Trigger email notification webhook
 router.post('/disputes/:id/notify-email', notifyEmail);
+
+// Delete dispute
+router.delete('/disputes/:id', deleteDispute);
 
 module.exports = router;

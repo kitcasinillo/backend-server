@@ -7,6 +7,7 @@ const {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   query,
   where,
   orderBy,
@@ -21,6 +22,40 @@ const outcomeStatusMap = {
   deny: 'denied'
 };
 
+// Helper to determine account status from a Firestore profile document
+function resolveAccountStatus(data, role) {
+  if (!data) return 'deleted';
+
+  if (role === 'healer' || role === 'seeker') {
+    const roleStatus = data[`${role}_status`];
+    const roleDeleted = data[`${role}_deleted`];
+    const roleSuspended = data[`${role}_suspended`];
+    const hasRoleScopedState =
+      roleStatus !== undefined || roleDeleted !== undefined || roleSuspended !== undefined;
+
+    if (hasRoleScopedState) {
+      const explicitRole = String(roleStatus || '').toLowerCase();
+      if (explicitRole === 'deleted' || roleDeleted === true) return 'deleted';
+      if (explicitRole === 'suspended' || explicitRole === 'blocked' || explicitRole === 'inactive' || roleSuspended === true) return 'suspended';
+      return 'active';
+    }
+  }
+
+  const explicit = String(data.status || data.account_status || '').toLowerCase();
+  if (explicit === 'deleted' || data.is_deleted === true || data.deleted === true) return 'deleted';
+  if (explicit === 'suspended' || explicit === 'blocked' || explicit === 'inactive') return 'suspended';
+  if (data.is_suspended === true || data.suspended === true || data.disabled === true || data.is_disabled === true) return 'suspended';
+  return 'active';
+}
+
+function extractProfileName(data) {
+  if (!data) return null;
+  const first = data.first_name || '';
+  const last = data.last_name || '';
+  const full = `${first} ${last}`.trim();
+  return full || data.display_name || data.name || data.username || null;
+}
+
 // Helper to resolve a user's display name from profile
 async function resolveProfileName(db, userId) {
   try {
@@ -28,15 +63,73 @@ async function resolveProfileName(db, userId) {
     const ref = doc(db, 'profiles', userId);
     const snap = await getDoc(ref);
     if (!snap.exists()) return null;
-    const d = snap.data() || {};
-    const first = d.first_name || '';
-    const last = d.last_name || '';
-    const full = `${first} ${last}`.trim();
-    return full || d.display_name || d.name || null;
+    return extractProfileName(snap.data() || {});
   } catch (e) {
     console.warn('⚠️ Failed to resolve profile name for', userId, e?.message || e);
     return null;
   }
+}
+
+// Helper to resolve party name + account status with optional per-request profile cache
+async function resolvePartyInfo(db, userId, role, storedName, profileCache) {
+  let profileData = null;
+  let profileExists = false;
+
+  if (db && userId) {
+    if (profileCache && profileCache.has(userId)) {
+      const cached = profileCache.get(userId);
+      profileExists = cached.exists;
+      profileData = cached.data;
+    } else {
+      try {
+        const snap = await getDoc(doc(db, 'profiles', userId));
+        profileExists = snap.exists();
+        profileData = profileExists ? (snap.data() || {}) : null;
+      } catch (e) {
+        console.warn('⚠️ Failed to load profile for', userId, e?.message || e);
+      }
+      if (profileCache) {
+        profileCache.set(userId, { exists: profileExists, data: profileData });
+      }
+    }
+  }
+
+  const accountStatus = profileExists ? resolveAccountStatus(profileData, role) : 'deleted';
+  const profileName = profileExists ? extractProfileName(profileData) : null;
+  const normalizedStored = typeof storedName === 'string' && storedName.trim() ? storedName.trim() : null;
+  const resolvedName = normalizedStored || profileName || null;
+
+  return {
+    name: resolvedName,
+    accountStatus,
+    shouldBackfillName: !normalizedStored && Boolean(profileName),
+  };
+}
+
+// Enrich a dispute object with resolved seeker/healer names and account statuses, backfilling missing names in Firestore
+async function enrichDisputeParties(db, disputeId, data, profileCache) {
+  const [seekerInfo, healerInfo] = await Promise.all([
+    resolvePartyInfo(db, data.seekerId, 'seeker', data.seekerName, profileCache),
+    resolvePartyInfo(db, data.healerId, 'healer', data.healerName, profileCache),
+  ]);
+
+  const backfillPatch = {};
+  if (seekerInfo.shouldBackfillName) backfillPatch.seekerName = seekerInfo.name;
+  if (healerInfo.shouldBackfillName) backfillPatch.healerName = healerInfo.name;
+
+  if (Object.keys(backfillPatch).length > 0 && db && disputeId) {
+    updateDoc(doc(db, 'disputes', disputeId), backfillPatch).catch((err) => {
+      console.warn('⚠️ Failed to backfill party names on dispute', disputeId, err?.message || err);
+    });
+  }
+
+  return {
+    ...data,
+    seekerName: seekerInfo.name,
+    healerName: healerInfo.name,
+    seekerAccountStatus: seekerInfo.accountStatus,
+    healerAccountStatus: healerInfo.accountStatus,
+  };
 }
 
 // Helper: basic validation
@@ -73,8 +166,8 @@ const createDispute = async (req, res) => {
       bookingId: body.bookingId,
       seekerId: body.seekerId,
       healerId: body.healerId,
-      seekerName: seekerName || null,
-      healerName: healerName || null,
+      seekerName: seekerName || body.seekerName || null,
+      healerName: healerName || body.healerName || null,
       type: body.type,
       status: 'open',
       severity,
@@ -132,7 +225,8 @@ const getDispute = async (req, res) => {
     const ref = doc(db, 'disputes', id);
     const snap = await getDoc(ref);
     if (!snap.exists()) return res.status(404).json({ success: false, error: 'Not found' });
-    return res.json({ success: true, id, dispute: snap.data() });
+    const enriched = await enrichDisputeParties(db, id, snap.data(), new Map());
+    return res.json({ success: true, id, dispute: enriched });
   } catch (err) {
     console.error('❌ Error fetching dispute:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -156,7 +250,13 @@ const listDisputes = async (req, res) => {
 
     const q = filters.length ? query(baseRef, ...filters) : query(baseRef);
     const snap = await getDocs(q);
-    let items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const profileCache = new Map();
+    let items = await Promise.all(
+      snap.docs.map(async (d) => {
+        const enriched = await enrichDisputeParties(db, d.id, d.data(), profileCache);
+        return { id: d.id, ...enriched };
+      })
+    );
 
     // Sort in-memory by submittedAt (newest first)
     items.sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
@@ -337,6 +437,25 @@ const notifyEmail = async (req, res) => {
   }
 };
 
+// DELETE /api/disputes/:id
+const deleteDispute = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const id = req.params.id;
+    const ref = doc(db, 'disputes', id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return res.status(404).json({ success: false, error: 'Dispute not found' });
+
+    await deleteDoc(ref);
+    return res.json({ success: true, id, deletedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('❌ Error deleting dispute:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 module.exports = {
   createDispute,
   getDispute,
@@ -344,5 +463,6 @@ module.exports = {
   addEvidence,
   respond,
   decide,
-  notifyEmail
+  notifyEmail,
+  deleteDispute
 };
