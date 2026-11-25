@@ -11,11 +11,12 @@ console.log('✅ Environment variables loaded');
 
 // Import configurations
 const { initializeFirebase } = require('./config/database');
-const { initializeStripe } = require('./config/stripe');
+const { initializeStripe, loadStripeConfigFromDb } = require('./config/stripe');
 const { initializeEmailTransporter } = require('./config/email');
 
 // Import routes
 const paymentRoutes = require('./routes/paymentRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const healerRoutes = require('./routes/healerRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
@@ -35,6 +36,7 @@ const adminBookingRoutes = require('./routes/adminBookingRoutes');
 const adminRetreatRoutes = require('./routes/adminRetreatRoutes');
 const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
 const adminFinanceRoutes = require('./routes/adminFinanceRoutes');
+const adminStripeRoutes = require('./routes/adminStripeRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const campaignRoutes = require('./routes/campaignRoutes');
@@ -56,6 +58,7 @@ const PORT = process.env.PORT || 5001;
 // Initialize services
 initializeFirebase();
 initializeStripe();
+loadStripeConfigFromDb().catch(err => console.warn('Failed to load CMS Stripe config:', err?.message || err));
 initializeEmailTransporter();
 
 // Initialize settings (create defaults if not exist)
@@ -159,6 +162,7 @@ app.get('/favicon.ico', (req, res) => {
 
 // API Routes
 app.use('/api', paymentRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/healer', healerRoutes);
 app.use('/api', webhookRoutes);
 app.use('/api', bookingRoutes);
@@ -178,6 +182,7 @@ app.use('/api', adminBookingRoutes);
 app.use('/api/admin', adminRetreatRoutes);
 app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin/finance', adminFinanceRoutes);
+app.use('/api/admin/stripe', adminStripeRoutes);
 app.use('/api/admin', reportRoutes);
 app.use('/api', campaignRoutes);
 initializeCampaignScheduler();

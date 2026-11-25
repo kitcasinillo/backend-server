@@ -92,23 +92,51 @@ const getRevenueStats = async (req, res) => {
       }
     });
 
-    // Process Premium Subscriptions
-    const PREMIUM_PRICE = 120; // Hardcoded as per frontend suggestion
+    // Process Subscription Invoices (real Stripe invoice ledger) + legacy one-time upgrades
+    let subscriptionInvoicesSnap = { docs: [] };
+    try {
+      subscriptionInvoicesSnap = await getDocs(collection(db, 'subscription_invoices'));
+    } catch (_) {
+      // Collection may not exist yet
+    }
+
+    const healersWithLedgerInvoices = new Set();
+    subscriptionInvoicesSnap.docs.forEach(invDoc => {
+      const inv = invDoc.data();
+      if (inv.healerId) healersWithLedgerInvoices.add(inv.healerId);
+      const paidAt = inv.paidAt || inv.createdAt;
+      if (inv.status === 'paid' && paidAt && paidAt >= startIso && paidAt <= endIso) {
+        const amount = Number(inv.amountPaid || (inv.amountPaidCents ? inv.amountPaidCents / 100 : 0));
+        totalPremiumRevenue += amount;
+        totalPlatformRevenue += amount;
+        netPlatformRevenue += amount;
+
+        const dateKey = paidAt.split('T')[0];
+        const existing = chartDataMap.get(dateKey) || { revenue: 0, commission: 0 };
+        chartDataMap.set(dateKey, {
+          revenue: existing.revenue + amount,
+          commission: existing.commission + amount
+        });
+      }
+    });
+
+    // Legacy one-time upgrades (healers without Stripe subscription_invoices)
+    const LEGACY_PREMIUM_PRICE = 120;
     premiumHealersSnap.docs.forEach(doc => {
       const data = doc.data();
+      if (data.stripe_subscription_id || healersWithLedgerInvoices.has(doc.id)) return;
       const activatedAt = data.premium_activated_at;
-      
-      if (activatedAt && activatedAt >= startIso && activatedAt <= endIso) {
-        totalPremiumRevenue += PREMIUM_PRICE;
-        totalPlatformRevenue += PREMIUM_PRICE;
-        netPlatformRevenue += PREMIUM_PRICE; // Assuming no processing fee for now or simplified
 
-        // Aggregating for chart
+      if (activatedAt && activatedAt >= startIso && activatedAt <= endIso) {
+        totalPremiumRevenue += LEGACY_PREMIUM_PRICE;
+        totalPlatformRevenue += LEGACY_PREMIUM_PRICE;
+        netPlatformRevenue += LEGACY_PREMIUM_PRICE;
+
         const dateKey = activatedAt.split('T')[0];
         const existing = chartDataMap.get(dateKey) || { revenue: 0, commission: 0 };
         chartDataMap.set(dateKey, {
-          revenue: existing.revenue + PREMIUM_PRICE,
-          commission: existing.commission + PREMIUM_PRICE
+          revenue: existing.revenue + LEGACY_PREMIUM_PRICE,
+          commission: existing.commission + LEGACY_PREMIUM_PRICE
         });
       }
     });
@@ -194,20 +222,65 @@ const getPremiumSubscriptions = async (req, res) => {
     const db = getDatabase();
     if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
 
-    const premiumHealersSnap = await getDocs(query(collection(db, 'profiles'), where('subscription_type', '==', 'premium')));
-    
-    const subscriptions = premiumHealersSnap.docs.map(doc => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        healerName: data.displayName || data.name || 'Unknown',
-        email: data.email || 'N/A',
-        activatedAt: data.premium_activated_at ? data.premium_activated_at.split('T')[0] : 'N/A',
-        amountPaid: 120, // Static for now as per system design
-        stripeId: 'SUBS_' + doc.id.substring(0, 8),
-        status: 'Active'
-      };
+    const [profilesSnap, invoicesSnap] = await Promise.all([
+      getDocs(collection(db, 'profiles')),
+      getDocs(collection(db, 'subscription_invoices')).catch(() => ({ docs: [] })),
+    ]);
+
+    // Aggregate total paid per healer from subscription_invoices
+    const paidByHealer = new Map();
+    invoicesSnap.docs.forEach(invDoc => {
+      const inv = invDoc.data();
+      if (inv.status === 'paid' && inv.healerId) {
+        const amt = Number(inv.amountPaid || (inv.amountPaidCents ? inv.amountPaidCents / 100 : 0));
+        paidByHealer.set(inv.healerId, (paidByHealer.get(inv.healerId) || 0) + amt);
+      }
     });
+
+    const formatStatusLabel = (raw, isLegacyPremium, isExempt) => {
+      if (isExempt) return 'Exempt';
+      const s = String(raw || '').toLowerCase();
+      if (s === 'trialing') return 'Trialing';
+      if (s === 'active') return 'Active';
+      if (s === 'past_due') return 'Past Due';
+      if (s === 'canceled' || s === 'unpaid') return 'Canceled';
+      if (isLegacyPremium) return 'Active';
+      return 'Pending';
+    };
+
+    const subscriptions = profilesSnap.docs
+      .filter(pDoc => {
+        const d = pDoc.data();
+        return Boolean(
+          d.stripe_subscription_id ||
+          d.subscription_status ||
+          d.subscription_type === 'premium' ||
+          d.subscription_exempt === true
+        );
+      })
+      .map(pDoc => {
+        const data = pDoc.data();
+        const isLegacy = !data.stripe_subscription_id && data.subscription_type === 'premium';
+        const amountPaid = paidByHealer.has(pDoc.id)
+          ? Number(paidByHealer.get(pDoc.id).toFixed(2))
+          : (isLegacy ? 120 : 0);
+
+        const activatedIso = data.trial_start_at || data.premium_activated_at || data.created_at || null;
+        return {
+          id: pDoc.id,
+          healerName: data.display_name || data.displayName || data.name || 'Unknown',
+          email: data.email || 'N/A',
+          activatedAt: activatedIso ? String(activatedIso).split('T')[0] : 'N/A',
+          trialEndAt: data.trial_end_at ? String(data.trial_end_at).split('T')[0] : null,
+          upfrontFeeCharged: Boolean(data.upfront_fee_charged),
+          monthlyFee: data.monthly_fee_amount_cents
+            ? Number((data.monthly_fee_amount_cents / 100).toFixed(2))
+            : null,
+          amountPaid,
+          stripeId: data.stripe_subscription_id || ('LEGACY_' + pDoc.id.substring(0, 8)),
+          status: formatStatusLabel(data.subscription_status, isLegacy, data.subscription_exempt === true),
+        };
+      });
 
     return res.json({
       success: true,

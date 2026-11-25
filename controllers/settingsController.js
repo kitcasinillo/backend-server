@@ -1,6 +1,11 @@
 const { getDatabase } = require('../config/database');
 const { doc, getDoc, setDoc } = require('firebase/firestore');
 const { initAdmin } = require('../config/firebaseAdmin');
+const {
+  DEFAULT_HEALER_SUBSCRIPTION,
+  normalizeHealerSubscriptionConfig,
+  syncStripeSubscriptionPrice,
+} = require('./subscriptionController');
 
 const SETTINGS_COLLECTION = 'settings';
 const SETTINGS_DOC = 'app_config';
@@ -38,6 +43,7 @@ const DEFAULT_SETTINGS = {
     free: { amount: 0, currency: 'USD' },
     premium: { amount: 120, currency: 'USD' }
   },
+  healer_subscription: DEFAULT_HEALER_SUBSCRIPTION,
   admin_bootstrap: DEFAULT_ADMIN_BOOTSTRAP,
   welcome_emails: DEFAULT_WELCOME_EMAILS,
   created_at: new Date(),
@@ -236,7 +242,18 @@ const updateSettings = async (req, res) => {
       });
     }
 
-    const { listing_limit_free, listing_limit_premium, max_images_per_listing, max_file_size_mb, features, pricing, admin_bootstrap, welcome_emails, admin_email } = req.body;
+    const {
+      listing_limit_free,
+      listing_limit_premium,
+      max_images_per_listing,
+      max_file_size_mb,
+      features,
+      pricing,
+      healer_subscription,
+      admin_bootstrap,
+      welcome_emails,
+      admin_email,
+    } = req.body;
 
     const settingsRef = doc(db, SETTINGS_COLLECTION, SETTINGS_DOC);
 
@@ -250,6 +267,20 @@ const updateSettings = async (req, res) => {
     if (max_file_size_mb !== undefined) updateData.max_file_size_mb = max_file_size_mb;
     if (features !== undefined) updateData.features = features;
     if (pricing !== undefined) updateData.pricing = pricing;
+    if (healer_subscription !== undefined) {
+      const existingSnap = await getDoc(settingsRef);
+      const existingSub = existingSnap.exists() ? (existingSnap.data()?.healer_subscription || {}) : {};
+      const mergedSub = normalizeHealerSubscriptionConfig({
+        ...existingSub,
+        ...healer_subscription,
+      });
+      try {
+        updateData.healer_subscription = await syncStripeSubscriptionPrice(mergedSub);
+      } catch (stripeSyncErr) {
+        console.warn('⚠️ Failed to sync healer_subscription price to Stripe:', stripeSyncErr?.message || stripeSyncErr);
+        updateData.healer_subscription = mergedSub;
+      }
+    }
     if (welcome_emails !== undefined) {
       updateData.welcome_emails = welcome_emails;
       if (welcome_emails && welcome_emails.admin_email !== undefined) {

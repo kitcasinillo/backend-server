@@ -3,7 +3,7 @@
   "ext": "js,json",
   "ignore": ["node_modules/", "*.test.js", "*.spec.js"],
   "env": {
-    "NODE_ENV": "production"
+    "NODE_ENV": "development"
   },
   "delay": "1000",
   "legacyWatch": true,
