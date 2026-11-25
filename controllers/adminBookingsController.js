@@ -1,4 +1,4 @@
-const { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
+const { collection, deleteDoc, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
 
 const BOOKINGS_COLLECTION = 'bookings';
@@ -116,12 +116,36 @@ const listAdminBookings = async (req, res) => {
     const requestedStatus = String(req.query.status || '').trim();
     const requestedType = String(req.query.type || '').trim();
     const requestedPaymentStatus = String(req.query.paymentStatus || '').trim();
+    const requestedStartDate = String(req.query.startDate || '').trim();
+    const requestedEndDate = String(req.query.endDate || '').trim();
+
+    let startMs = null;
+    if (requestedStartDate) {
+      const parsedStart = new Date(requestedStartDate.includes('T') ? requestedStartDate : `${requestedStartDate}T00:00:00.000`);
+      if (!Number.isNaN(parsedStart.getTime())) startMs = parsedStart.getTime();
+    }
+
+    let endMs = null;
+    if (requestedEndDate) {
+      const parsedEnd = new Date(requestedEndDate.includes('T') ? requestedEndDate : `${requestedEndDate}T23:59:59.999`);
+      if (!Number.isNaN(parsedEnd.getTime())) endMs = parsedEnd.getTime();
+    }
 
     const filtered = results
       .filter((item) => matchesSearch(item, search))
       .filter((item) => !requestedStatus || item.status === requestedStatus)
       .filter((item) => !requestedType || item.bookingType === requestedType)
       .filter((item) => !requestedPaymentStatus || item.paymentStatus === requestedPaymentStatus)
+      .filter((item) => {
+        if (startMs === null && endMs === null) return true;
+        const rawDate = item.sessionDate || item.createdAt;
+        if (!rawDate) return false;
+        const itemMs = new Date(rawDate).getTime();
+        if (Number.isNaN(itemMs)) return false;
+        if (startMs !== null && itemMs < startMs) return false;
+        if (endMs !== null && itemMs > endMs) return false;
+        return true;
+      })
       .sort((a, b) => String(b.sessionDate || b.createdAt || '').localeCompare(String(a.sessionDate || a.createdAt || '')));
 
     return res.json({
@@ -132,6 +156,8 @@ const listAdminBookings = async (req, res) => {
         status: requestedStatus || '',
         type: requestedType || '',
         paymentStatus: requestedPaymentStatus || '',
+        startDate: requestedStartDate || '',
+        endDate: requestedEndDate || '',
       },
     });
   } catch (error) {
@@ -271,8 +297,36 @@ const updateAdminBookingFlags = async (req, res) => {
   }
 };
 
+const deleteAdminBooking = async (req, res) => {
+  try {
+    const db = getDatabase();
+    if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
+
+    const { id } = req.params;
+    const bookingRef = doc(db, BOOKINGS_COLLECTION, id);
+    const bookingSnap = await getDoc(bookingRef);
+    if (!bookingSnap.exists()) {
+      return res.status(404).json({ success: false, error: 'Booking not found' });
+    }
+
+    await deleteDoc(bookingRef);
+
+    return res.json({
+      success: true,
+      data: {
+        id,
+        deleted: true,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error deleting admin booking:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   listAdminBookings,
   getAdminBookingDetail,
   updateAdminBookingFlags,
+  deleteAdminBooking,
 };
