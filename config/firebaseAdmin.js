@@ -8,13 +8,16 @@ const initAdmin = () => {
   if (initialized) return admin;
 
   try {
+    const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || (process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : undefined);
+
     // Method 1: Check for serviceAccountKey.json file in backend-server directory
     const serviceAccountPath = path.resolve(__dirname, '../serviceAccountKey.json');
     if (fs.existsSync(serviceAccountPath)) {
       const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
-        databaseURL: process.env.FIREBASE_DATABASE_URL || `https://${serviceAccount.project_id || 'ultrahealers'}-default-rtdb.firebaseio.com`
+        databaseURL: process.env.FIREBASE_DATABASE_URL || `https://${serviceAccount.project_id || 'ultrahealers'}-default-rtdb.firebaseio.com`,
+        storageBucket: storageBucket || (serviceAccount.project_id ? `${serviceAccount.project_id}.appspot.com` : undefined),
       });
       initialized = true;
       console.log('✅ Firebase Admin SDK initialized using local serviceAccountKey.json');
@@ -61,6 +64,7 @@ const initAdmin = () => {
           clientEmail,
           privateKey,
         }),
+        storageBucket,
       });
       initialized = true;
       console.log('✅ Firebase Admin SDK initialized using environment variables (FIREBASE_CLIENT_EMAIL / FIREBASE_PRIVATE_KEY)');

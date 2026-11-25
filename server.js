@@ -37,7 +37,9 @@ const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
 const adminFinanceRoutes = require('./routes/adminFinanceRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const campaignRoutes = require('./routes/campaignRoutes');
 const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
+const { initializeCampaignScheduler } = require('./controllers/campaignController');
 
 // Import commission config for logging
 const COMMISSION_CONFIG = require('./config/commission');
@@ -177,6 +179,8 @@ app.use('/api', adminRetreatRoutes);
 app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin/finance', adminFinanceRoutes);
 app.use('/api/admin', reportRoutes);
+app.use('/api', campaignRoutes);
+initializeCampaignScheduler();
 const { collectAnalyticsEvent, getAnalyticsStats, resetAnalyticsTrackers } = require('./controllers/analyticsController');
 
 // Direct Analytics Collector Endpoints (Top-level matching for all URL path variants)
