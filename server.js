@@ -175,7 +175,7 @@ app.use('/api', disputeRoutes);
 app.use('/api', adminUserRoutes);
 app.use('/api', adminListingRoutes);
 app.use('/api', adminBookingRoutes);
-app.use('/api', adminRetreatRoutes);
+app.use('/api/admin', adminRetreatRoutes);
 app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin/finance', adminFinanceRoutes);
 app.use('/api/admin', reportRoutes);

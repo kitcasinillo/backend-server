@@ -535,6 +535,7 @@ const previewAudience = async (req, res) => {
       success: true,
       count: recipients.length,
       sample: recipients.slice(0, 5).map((r) => ({ name: r.name, email: r.email })),
+      recipients: recipients.map((r) => ({ id: r.id || null, name: r.name, email: r.email })),
     });
   } catch (error) {
     console.error('❌ Error previewing campaign audience:', error);

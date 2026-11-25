@@ -91,16 +91,12 @@ const loadAllListings = async () => {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
-  const healerMap = await loadHealerMap(db);
-  const [sessionSnap, retreatSnap] = await Promise.all([
+  const [healerMap, sessionSnap] = await Promise.all([
+    loadHealerMap(db),
     getDocs(query(collection(db, LISTINGS_COLLECTION), limit(300))),
-    getDocs(query(collection(db, RETREAT_LISTINGS_COLLECTION), limit(300))),
   ]);
 
-  const items = [
-    ...sessionSnap.docs.map((docSnap) => buildListingListItem(docSnap, healerMap, 'session')),
-    ...retreatSnap.docs.map((docSnap) => buildListingListItem(docSnap, healerMap, 'retreat')),
-  ];
+  const items = sessionSnap.docs.map((docSnap) => buildListingListItem(docSnap, healerMap, 'session'));
 
   return { db, healerMap, items };
 };
