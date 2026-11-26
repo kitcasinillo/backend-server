@@ -38,6 +38,7 @@ const adminFinanceRoutes = require('./routes/adminFinanceRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const campaignRoutes = require('./routes/campaignRoutes');
+const redFlagRoutes = require('./routes/redFlagRoutes');
 const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
 const { initializeCampaignScheduler } = require('./controllers/campaignController');
 
@@ -180,6 +181,7 @@ app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin/finance', adminFinanceRoutes);
 app.use('/api/admin', reportRoutes);
 app.use('/api', campaignRoutes);
+app.use('/api/moderation', redFlagRoutes);
 initializeCampaignScheduler();
 const { collectAnalyticsEvent, getAnalyticsStats, resetAnalyticsTrackers } = require('./controllers/analyticsController');
 
