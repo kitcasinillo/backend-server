@@ -190,6 +190,7 @@ const getAdminListingDetail = async (req, res) => {
           ? raw.requiredInfo
           : [],
       images: Array.isArray(raw.images) ? raw.images : Array.isArray(raw.photos) ? raw.photos : [],
+      bookingPerks: Array.isArray(raw.bookingPerks) ? raw.bookingPerks : [],
       featured: raw.featured === true,
       revisionHistory: Array.isArray(raw.revision_history) ? raw.revision_history : [],
       performance: {

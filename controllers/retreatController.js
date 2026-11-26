@@ -20,7 +20,8 @@ function mapListingToPublic(item) {
     longDescription: item.detailedDescription || item.longDescription || item.description || '',
     hostName: item.healerName || item.hostName || 'Hosted Retreat',
     hostEmail: item.contactEmail || item.hostEmail || '',
-    capacity: Number(item.maxParticipants || item.capacity || 0)
+    capacity: Number(item.maxParticipants || item.capacity || 0),
+    bookingPerks: Array.isArray(item.bookingPerks) ? item.bookingPerks : []
   }
 }
 
