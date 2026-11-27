@@ -2,52 +2,97 @@ const cron = require('node-cron');
 const NotificationService = require('./notificationService');
 const SessionReminderService = require('./sessionReminderService');
 
+const UNREAD_SCHEDULE = '0 */6 * * *';
+
+function getNextSixHourUtcRun(now = new Date()) {
+  const next = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    now.getUTCHours(),
+    0,
+    0,
+    0
+  ));
+  const nextHour = (Math.floor(now.getUTCHours() / 6) + 1) * 6;
+  next.setUTCHours(nextHour, 0, 0, 0);
+  return next.toISOString();
+}
+
 class CronScheduler {
   constructor() {
     this.notificationService = new NotificationService();
     this.sessionReminderService = new SessionReminderService();
     this.isRunning = false;
+    this.unreadTask = null;
+    this.reminderTask = null;
+    this.lastRunTime = null;
+    this.schedule = UNREAD_SCHEDULE;
+    this.timezone = 'UTC';
   }
 
-  // Start the cron job scheduler
+  // Start the cron job scheduler (idempotent — never registers duplicate tasks)
   start() {
-    console.log('🚀 Starting cron job scheduler...');
-    
-    // Schedule unread message notifications every 6 hours
-    cron.schedule('0 */6 * * *', async () => {
-      await this.runUnreadMessageNotifications();
-    }, {
-      scheduled: true,
-      timezone: "UTC"
-    });
+    if (this.isRunning) {
+      console.log('ℹ️ Cron job scheduler is already running');
+      return;
+    }
 
-    // Schedule session reminders (configurable)
+    console.log('🚀 Starting cron job scheduler...');
+
+    // Schedule or resume unread message notifications every 6 hours
+    if (!this.unreadTask) {
+      this.unreadTask = cron.schedule(this.schedule, async () => {
+        await this.runUnreadMessageNotifications();
+      }, {
+        scheduled: true,
+        timezone: this.timezone
+      });
+    } else {
+      this.unreadTask.start();
+    }
+
+    // Schedule or resume session reminders (configurable)
     const remindersEnabled = process.env.SESSION_REMINDERS_ENABLED !== 'false';
     const remindersCron = process.env.SESSION_REMINDER_CRON || '*/10 * * * *';
     if (remindersEnabled) {
-      cron.schedule(remindersCron, async () => {
-        await this.runSessionReminders();
-      }, {
-        scheduled: true,
-        timezone: 'UTC'
-      });
+      if (!this.reminderTask) {
+        this.reminderTask = cron.schedule(remindersCron, async () => {
+          await this.runSessionReminders();
+        }, {
+          scheduled: true,
+          timezone: this.timezone
+        });
+      } else {
+        this.reminderTask.start();
+      }
     } else {
       console.log('ℹ️ Session reminders disabled via SESSION_REMINDERS_ENABLED');
     }
 
     console.log('✅ Cron jobs scheduled:');
-    console.log('   📧 Unread message notifications: Every 6 hours');
+    console.log(`   📧 Unread message notifications: Every 6 hours (${this.schedule} ${this.timezone})`);
     if (remindersEnabled) {
-      console.log(`   ⏰ Session reminders: ${remindersCron}`);
+      console.log(`   ⏰ Session reminders: ${remindersCron} ${this.timezone}`);
     }
-    
+
     this.isRunning = true;
   }
 
   // Stop the cron job scheduler
   stop() {
+    if (!this.isRunning) {
+      console.log('ℹ️ Cron job scheduler is already stopped');
+      return;
+    }
+
     console.log('🛑 Stopping cron job scheduler...');
-    cron.getTasks().forEach(task => task.stop());
+    if (this.unreadTask) {
+      this.unreadTask.stop();
+    }
+    if (this.reminderTask) {
+      this.reminderTask.stop();
+    }
     this.isRunning = false;
     console.log('✅ Cron jobs stopped');
   }
@@ -57,11 +102,12 @@ class CronScheduler {
     try {
       console.log('⏰ Running scheduled unread message notifications...');
       const startTime = Date.now();
-      
+
       const result = await this.notificationService.processUnreadMessageNotifications();
-      
+      this.lastRunTime = new Date().toISOString();
+
       const duration = Date.now() - startTime;
-      
+
       if (result.success) {
         console.log(`✅ Scheduled notification run completed in ${duration}ms`);
         console.log(`   📧 Emails sent: ${result.totalEmailsSent}`);
@@ -70,7 +116,7 @@ class CronScheduler {
       } else {
         console.error(`❌ Scheduled notification run failed: ${result.error}`);
       }
-      
+
       return result;
     } catch (error) {
       console.error('❌ Error in scheduled notification run:', error);
@@ -78,14 +124,23 @@ class CronScheduler {
     }
   }
 
-  // Get scheduler status
+  // Get scheduler status (aligned with CMS SchedulerStatus contract)
   getStatus() {
+    const tasks = [];
+    if (this.unreadTask) {
+      tasks.push({ name: 'Unread Message Notifications', running: this.isRunning });
+    }
+    if (this.reminderTask) {
+      tasks.push({ name: 'Session Reminders', running: this.isRunning });
+    }
+
     return {
       isRunning: this.isRunning,
-      tasks: cron.getTasks().map(task => ({
-        name: task.name || 'Unnamed task',
-        running: task.running
-      }))
+      schedule: `Every 6 hours (${this.schedule} ${this.timezone})`,
+      timezone: this.timezone,
+      nextRunTime: this.isRunning ? getNextSixHourUtcRun() : null,
+      lastRunTime: this.lastRunTime,
+      tasks
     };
   }
 

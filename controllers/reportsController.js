@@ -7,6 +7,7 @@ const {
   getCountFromServer,
 } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
+const { hasRole } = require('../utils/profileRoles');
 
 /**
  * Safely converts any Firestore timestamp format to an ISO string.
@@ -238,8 +239,8 @@ const getUserReportData = async (req, res) => {
       profilesInRange.forEach((profile) => {
         const lastActivity = profile.lastActivityAt || profile.createdAt;
         if (lastActivity && lastActivity < cutoffDate) {
-          if (profile.role === 'healer') inactiveHealers++;
-          if (profile.role === 'seeker') inactiveSeekers++;
+          if (hasRole(profile, 'healer')) inactiveHealers++;
+          if (hasRole(profile, 'seeker')) inactiveSeekers++;
         }
       });
 
@@ -253,8 +254,8 @@ const getUserReportData = async (req, res) => {
     // =====================================================
     // 4. Funnel Data (uses date-filtered profiles)
     // =====================================================
-    const healersInRange = profilesInRange.filter((p) => p.role === 'healer');
-    const seekersInRange = profilesInRange.filter((p) => p.role === 'seeker');
+    const healersInRange = profilesInRange.filter((p) => hasRole(p, 'healer'));
+    const seekersInRange = profilesInRange.filter((p) => hasRole(p, 'seeker'));
 
     const healerFunnel = [
       { step: 'Registered', value: healersInRange.length },
@@ -1089,9 +1090,16 @@ const getPlatformOverviewData = async (req, res) => {
         const start = new Date(); start.setDate(now.getDate() - 7); start.setHours(0, 0, 0, 0);
         startIso = start.toISOString();
       } else if (range === 'This Month') {
-        startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Year') {
+        const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'All Time') {
+        startIso = new Date(0).toISOString();
       } else {
-        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
       }
     }
 
@@ -1103,10 +1111,15 @@ const getPlatformOverviewData = async (req, res) => {
       getDocs(collection(db, 'app_users')), // Assuming premium status is also tracked here or in profiles
     ]);
 
-    const allProfiles = profilesSnap.docs.map(d => ({
-      role: d.data().role,
-      createdAt: toIsoOrNull(d.data().created_at || d.data().createdAt)
-    }));
+    const allProfiles = profilesSnap.docs.map(d => {
+      const data = d.data() || {};
+      return {
+        role: data.role,
+        roles: data.roles,
+        type: data.type,
+        createdAt: toIsoOrNull(data.created_at || data.createdAt)
+      };
+    });
 
     const allBookings = bookingsSnap.docs.map(d => {
       const data = d.data();
@@ -1135,8 +1148,10 @@ const getPlatformOverviewData = async (req, res) => {
       if (!p.createdAt || p.createdAt < startIso || p.createdAt > endIso) return;
       const key = getDateKey(p.createdAt, granularity);
       if (!userGrowthMap[key]) userGrowthMap[key] = { healers: 0, seekers: 0 };
-      if (p.role === 'healer') userGrowthMap[key].healers++;
-      else userGrowthMap[key].seekers++;
+      const isHealer = hasRole(p, 'healer');
+      const isSeeker = hasRole(p, 'seeker');
+      if (isHealer) userGrowthMap[key].healers++;
+      if (isSeeker || !isHealer) userGrowthMap[key].seekers++;
     });
 
     const userGrowth = Object.entries(userGrowthMap)
@@ -1186,8 +1201,8 @@ const getPlatformOverviewData = async (req, res) => {
       }));
 
     // 4. Summary Metrics
-    const totalNewHealers = allProfiles.filter(p => p.role === 'healer' && p.createdAt >= startIso && p.createdAt <= endIso).length;
-    const totalNewSeekers = allProfiles.filter(p => p.role === 'seeker' && p.createdAt >= startIso && p.createdAt <= endIso).length;
+    const totalNewHealers = allProfiles.filter(p => hasRole(p, 'healer') && p.createdAt >= startIso && p.createdAt <= endIso).length;
+    const totalNewSeekers = allProfiles.filter(p => hasRole(p, 'seeker') && p.createdAt >= startIso && p.createdAt <= endIso).length;
     const totalBookingsInRange = allBookings.filter(b => b.isValid && b.createdAt >= startIso && b.createdAt <= endIso);
     const totalSessions = totalBookingsInRange.filter(b => !b.isRetreat).length;
     const totalRetreats = totalBookingsInRange.filter(b => b.isRetreat).length;
@@ -1268,9 +1283,16 @@ const getDisputeReportData = async (req, res) => {
         const start = new Date(); start.setDate(now.getDate() - 7); start.setHours(0, 0, 0, 0);
         startIso = start.toISOString();
       } else if (range === 'This Month') {
-        startIso = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'This Year') {
+        const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
+      } else if (range === 'All Time') {
+        startIso = new Date(0).toISOString();
       } else {
-        startIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+        startIso = start.toISOString();
       }
     }
 

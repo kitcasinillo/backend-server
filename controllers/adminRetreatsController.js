@@ -72,6 +72,7 @@ const buildRetreatBase = (id, data, profileMap) => {
     imageUrl: data.coverImageUrl || (Array.isArray(data.images) && data.images[0]) || '',
     shortDescription: data.description || data.shortDescription || '',
     longDescription: data.detailedDescription || data.longDescription || data.description || '',
+    bookingPerks: Array.isArray(data.bookingPerks) ? data.bookingPerks : [],
     createdAt: toIsoOrNull(data.createdAt || data.created_at),
     updatedAt: toIsoOrNull(data.updatedAt || data.updated_at),
   };

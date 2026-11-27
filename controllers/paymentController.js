@@ -35,6 +35,52 @@ const createPaymentIntent = async (req, res) => {
       });
     }
 
+    // Block payment intents for suspended or deleted healers
+    if (healerId) {
+      try {
+        const db = getDatabase();
+        if (db) {
+          const healerSnap = await getDoc(doc(db, 'profiles', healerId));
+          if (healerSnap.exists()) {
+            const d = healerSnap.data() || {};
+            const hasHealerScopedState =
+              d.healer_status !== undefined || d.healer_suspended !== undefined || d.healer_deleted !== undefined;
+            const hs = String(d.healer_status || '').toLowerCase();
+            const st = String(d.status || d.account_status || '').toLowerCase();
+            const isRestricted = hasHealerScopedState
+              ? (
+                  hs === 'deleted' ||
+                  hs === 'suspended' ||
+                  hs === 'blocked' ||
+                  hs === 'inactive' ||
+                  d.healer_deleted === true ||
+                  d.healer_suspended === true
+                )
+              : (
+                  st === 'deleted' ||
+                  st === 'suspended' ||
+                  st === 'blocked' ||
+                  st === 'inactive' ||
+                  d.is_deleted === true ||
+                  d.deleted === true ||
+                  d.is_suspended === true ||
+                  d.suspended === true ||
+                  d.disabled === true ||
+                  d.is_disabled === true
+                );
+            if (isRestricted) {
+              return res.status(403).json({
+                success: false,
+                error: 'This healer is currently unavailable and cannot accept new bookings.'
+              });
+            }
+          }
+        }
+      } catch (healerCheckErr) {
+        console.warn('⚠️ Failed to check healer availability during payment intent:', healerCheckErr.message);
+      }
+    }
+
     // Calculate commission breakdown
     const breakdown = calculateCommissionBreakdown(baseAmount);
     

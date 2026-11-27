@@ -31,6 +31,8 @@ function formatSessionDate(sessionDate) {
 
 function generateHealerEmail(data) {
   const sessionDateTime = formatSessionDate(data.sessionDate);
+  const healerAppUrl = (process.env.HEALER_APP_URL || 'https://healer.ultrahealers.com').replace(/\/+$/, '');
+  const feedbackUrl = `${healerAppUrl}/?feedback=1&source=booking_email`;
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <h2 style="color: #01A3B4;">🎉 New Booking Confirmed!</h2>
@@ -55,6 +57,13 @@ function generateHealerEmail(data) {
         <strong>⚠️ Action Required:</strong> Please log in to your dashboard to confirm this booking and prepare for the session.
       </p>
 
+      <div style="margin-top: 24px; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <p style="margin: 0; color: #334155; font-size: 13px;">
+          Have a feature idea to make UltraHealers better for practitioners?
+          <a href="${feedbackUrl}" style="color: #01A3B4; font-weight: 600; text-decoration: none;">Share a quick request</a>.
+        </p>
+      </div>
+
       <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
         <p style="color: #666; font-size: 12px;">
           This is an automated message from Ultra Healers. Please do not reply to this email.
@@ -66,6 +75,8 @@ function generateHealerEmail(data) {
 
 function generateSeekerEmail(data) {
   const sessionDateTime = formatSessionDate(data.sessionDate);
+  const seekerAppUrl = (process.env.SEEKER_APP_URL || 'https://app.ultrahealers.com').replace(/\/+$/, '');
+  const feedbackUrl = `${seekerAppUrl}/?feedback=1&source=booking_email`;
   return `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
       <h2 style="color: #01A3B4;">✅ Your Booking is Confirmed!</h2>
@@ -92,6 +103,13 @@ function generateSeekerEmail(data) {
       <p style="margin-top: 20px;">
         If you have any questions, please log in to your dashboard or contact our support team.
       </p>
+
+      <div style="margin-top: 24px; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;">
+        <p style="margin: 0; color: #334155; font-size: 13px;">
+          Have a feature idea for UltraHealers?
+          <a href="${feedbackUrl}" style="color: #01A3B4; font-weight: 600; text-decoration: none;">Share a quick feature request</a>.
+        </p>
+      </div>
 
       <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
         <p style="color: #666; font-size: 12px;">

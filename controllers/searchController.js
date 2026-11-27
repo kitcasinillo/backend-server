@@ -1,5 +1,6 @@
 const { getDatabase } = require('../config/database');
 const { collection, getDocs, query, limit } = require('firebase/firestore');
+const { hasRole } = require('../utils/profileRoles');
 
 // Map Firestore healer profile to search result shape expected by seeker app
 const mapHealerToSearchResult = (doc) => {
@@ -48,6 +49,35 @@ const normalizeModalities = (mods = []) => {
   return Array.from(new Set(lowered));
 };
 
+const isProfileRestricted = (d = {}) => {
+  const hasHealerScopedState =
+    d.healer_status !== undefined || d.healer_suspended !== undefined || d.healer_deleted !== undefined;
+  if (hasHealerScopedState) {
+    const hs = String(d.healer_status || '').toLowerCase();
+    return (
+      hs === 'deleted' ||
+      hs === 'suspended' ||
+      hs === 'blocked' ||
+      hs === 'inactive' ||
+      d.healer_deleted === true ||
+      d.healer_suspended === true
+    );
+  }
+  const status = String(d.status || d.account_status || '').toLowerCase();
+  return (
+    status === 'deleted' ||
+    status === 'suspended' ||
+    status === 'blocked' ||
+    status === 'inactive' ||
+    d.is_deleted === true ||
+    d.deleted === true ||
+    d.is_suspended === true ||
+    d.suspended === true ||
+    d.disabled === true ||
+    d.is_disabled === true
+  );
+};
+
 // POST /api/healers/search
 const searchHealers = async (req, res) => {
   try {
@@ -62,12 +92,24 @@ const searchHealers = async (req, res) => {
 
     const requestedMods = normalizeModalities(params.modalities || []);
 
-    let filtered = snapshot.docs.filter((doc) => {
+    const activeHealerDocs = snapshot.docs.filter((doc) => {
       try {
         const d = doc.data() || {};
-        if (d.role && String(d.role).toLowerCase() !== 'healer') {
+        if (!hasRole(d, 'healer')) {
           return false;
         }
+        if (isProfileRestricted(d)) {
+          return false;
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    });
+
+    let filtered = activeHealerDocs.filter((doc) => {
+      try {
+        const d = doc.data() || {};
         if (!Array.isArray(params.modalities) || params.modalities.length === 0 || params.modalities.includes('open-to-anything')) {
           return true;
         }
@@ -81,7 +123,7 @@ const searchHealers = async (req, res) => {
     });
 
     if (filtered.length === 0) {
-      filtered = snapshot.docs;
+      filtered = activeHealerDocs;
     }
 
     const results = filtered.map(mapHealerToSearchResult);
@@ -108,7 +150,7 @@ const adminSearchHealers = async (req, res) => {
     const results = snapshot.docs
       .map((doc) => {
         const d = doc.data() || {};
-        if (d.role && String(d.role).toLowerCase() !== 'healer') {
+        if (!hasRole(d, 'healer')) {
           return null;
         }
 

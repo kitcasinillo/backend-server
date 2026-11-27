@@ -1,19 +1,19 @@
-const { collection, getDocs, query, limit, orderBy, where, getCountFromServer } = require('firebase/firestore');
+const { collection, getDocs, query, limit, orderBy } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
+const { queryProfilesByRole } = require('../utils/profileRoles');
 
 const getDashboardStats = async (req, res) => {
   try {
     const db = getDatabase();
     if (!db) return res.status(500).json({ success: false, error: 'Database not initialized' });
 
-    // 1. Get counts using getCountFromServer
-    const healersQuery = query(collection(db, 'profiles'), where('role', '==', 'healer'));
-    const healersSnap = await getCountFromServer(healersQuery);
-    const totalHealers = healersSnap.data().count;
-
-    const seekersQuery = query(collection(db, 'profiles'), where('role', '==', 'seeker'));
-    const seekersSnap = await getCountFromServer(seekersQuery);
-    const totalSeekers = seekersSnap.data().count;
+    // 1. Get healer and seeker counts across roles[] (with legacy role fallback)
+    const [healerDocs, seekerDocs] = await Promise.all([
+      queryProfilesByRole(db, 'healer', 1000),
+      queryProfilesByRole(db, 'seeker', 1000),
+    ]);
+    const totalHealers = healerDocs.length;
+    const totalSeekers = seekerDocs.length;
 
     const { range = 'this_month' } = req.query;
 
@@ -97,18 +97,28 @@ const getDashboardStats = async (req, res) => {
         const actionMap = {
             'UPDATE_SETTINGS': 'updated settings',
             'DELETE_LISTING': 'deleted a listing',
-            'USER_SUSPENDED': 'suspended a user',
+            'USER_SUSPENDED': 'suspended user',
+            'SUSPEND_HEALER': 'suspended healer',
+            'SUSPEND_SEEKER': 'suspended seeker',
+            'SOFT_DELETE_HEALER': 'soft-deleted healer',
+            'PERMANENT_DELETE_HEALER': 'permanently deleted healer',
+            'RESTORE_HEALER': 'restored healer',
+            'SOFT_DELETE_SEEKER': 'soft-deleted seeker',
+            'PERMANENT_DELETE_SEEKER': 'permanently deleted seeker',
+            'RESTORE_SEEKER': 'restored seeker',
             'CAMPAIGN_SENT': 'sent a campaign'
         };
 
         auditSnap.docs.forEach(doc => {
             const d = doc.data();
             const actionText = actionMap[d.action] || String(d.action || 'performed an action').toLowerCase().replace(/_/g, ' ');
+            const targetName = typeof d.targetName === 'string' && d.targetName.trim() ? d.targetName.trim() : '';
+            const targetSuffix = targetName ? ` "${targetName}"` : '';
             
             recentActivity.push({
                 id: doc.id,
                 type: 'audit',
-                title: `Audit: ${d.adminEmail?.split('@')[0] || 'Admin'} ${actionText}`,
+                title: `Audit: ${d.adminEmail?.split('@')[0] || 'Admin'} ${actionText}${targetSuffix}`,
                 timestamp: d.timestamp?.toDate ? d.timestamp.toDate().toISOString() : (d.timestamp || new Date().toISOString()),
                 status: d.module || 'System',
                 isRed: String(d.action).includes('DELETE') || String(d.action).includes('SUSPEND')

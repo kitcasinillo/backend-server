@@ -37,7 +37,11 @@ const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
 const adminFinanceRoutes = require('./routes/adminFinanceRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const campaignRoutes = require('./routes/campaignRoutes');
+const redFlagRoutes = require('./routes/redFlagRoutes');
+const feedbackRoutes = require('./routes/feedbackRoutes');
 const { initializeModalitiesIfEmpty } = require('./controllers/modalitiesController');
+const { initializeCampaignScheduler } = require('./controllers/campaignController');
 
 // Import commission config for logging
 const COMMISSION_CONFIG = require('./config/commission');
@@ -173,10 +177,14 @@ app.use('/api', disputeRoutes);
 app.use('/api', adminUserRoutes);
 app.use('/api', adminListingRoutes);
 app.use('/api', adminBookingRoutes);
-app.use('/api', adminRetreatRoutes);
+app.use('/api/admin', adminRetreatRoutes);
 app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin/finance', adminFinanceRoutes);
 app.use('/api/admin', reportRoutes);
+app.use('/api', campaignRoutes);
+app.use('/api/moderation', redFlagRoutes);
+app.use('/api/feedback', feedbackRoutes);
+initializeCampaignScheduler();
 const { collectAnalyticsEvent, getAnalyticsStats, resetAnalyticsTrackers } = require('./controllers/analyticsController');
 
 // Direct Analytics Collector Endpoints (Top-level matching for all URL path variants)
@@ -253,4 +261,4 @@ app.listen(PORT, () => {
   }
 });
 
-module.exports = app; // Trigger nodemon reload after controller changes
+module.exports = app; // Trigger nodemon reload after Platform Overview time range update

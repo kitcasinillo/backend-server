@@ -1,5 +1,6 @@
 const { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } = require('firebase/firestore');
 const { getDatabase } = require('../config/database');
+const { queryProfilesByRole } = require('../utils/profileRoles');
 
 const PROFILES_COLLECTION = 'profiles';
 const LISTINGS_COLLECTION = 'listings';
@@ -78,8 +79,8 @@ const buildListingListItem = (docSnap, healerMap, source = 'session') => {
 };
 
 const loadHealerMap = async (db) => {
-  const profileSnap = await getDocs(query(collection(db, PROFILES_COLLECTION), where('role', '==', 'healer'), limit(300)));
-  return new Map(profileSnap.docs.map((profileDoc) => {
+  const healerDocs = await queryProfilesByRole(db, 'healer', 300);
+  return new Map(healerDocs.map((profileDoc) => {
     const data = profileDoc.data() || {};
     const name = `${data.first_name || ''} ${data.last_name || ''}`.trim() || data.display_name || data.name || 'Unknown Healer';
     return [profileDoc.id, { id: profileDoc.id, name, email: data.email || data.contact_email || '' }];
@@ -90,16 +91,12 @@ const loadAllListings = async () => {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
-  const healerMap = await loadHealerMap(db);
-  const [sessionSnap, retreatSnap] = await Promise.all([
+  const [healerMap, sessionSnap] = await Promise.all([
+    loadHealerMap(db),
     getDocs(query(collection(db, LISTINGS_COLLECTION), limit(300))),
-    getDocs(query(collection(db, RETREAT_LISTINGS_COLLECTION), limit(300))),
   ]);
 
-  const items = [
-    ...sessionSnap.docs.map((docSnap) => buildListingListItem(docSnap, healerMap, 'session')),
-    ...retreatSnap.docs.map((docSnap) => buildListingListItem(docSnap, healerMap, 'retreat')),
-  ];
+  const items = sessionSnap.docs.map((docSnap) => buildListingListItem(docSnap, healerMap, 'session'));
 
   return { db, healerMap, items };
 };
@@ -193,6 +190,7 @@ const getAdminListingDetail = async (req, res) => {
           ? raw.requiredInfo
           : [],
       images: Array.isArray(raw.images) ? raw.images : Array.isArray(raw.photos) ? raw.photos : [],
+      bookingPerks: Array.isArray(raw.bookingPerks) ? raw.bookingPerks : [],
       featured: raw.featured === true,
       revisionHistory: Array.isArray(raw.revision_history) ? raw.revision_history : [],
       performance: {
